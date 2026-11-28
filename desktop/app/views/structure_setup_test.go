@@ -23,6 +23,22 @@ func stSetupPage(t *testing.T, height int) (*App, *csFake, *ui.Tester, *structur
 	return a, f, tt, a.PageFor("structure").(*structurePage)
 }
 
+// stPick chooses an algorithm as a user does: the Evidence and Regions
+// steps it needs, then the algorithm. COMRADES folds two regions only when
+// two is set.
+func stPick(t *testing.T, tt *ui.Tester, engine string, two bool) {
+	t.Helper()
+	two = two || engine == engineCPLcofold || engine == engineRNAcofold
+	for _, label := range []string{
+		map[bool]string{true: "Guided by HYB chimeras", false: "Sequence only"}[stGuidedEngine(engine)],
+		map[bool]string{true: "Two regions", false: "One region"}[two],
+		stAlgorithmLabels[engine],
+	} {
+		mustClick(t, tt, label)
+		tt.Frame()
+	}
+}
+
 // Unlike a gene-only fixture, this backend returns different bases for the
 // same selectable HYB alias on different references. Physical FASTA names
 // are deliberately absent: the runtime, not the form, maps those names.
@@ -197,7 +213,7 @@ func TestStructureQualifiedReferenceSelection(t *testing.T) {
 	}
 
 	// Changing evidence must not silently reinterpret the explicit RNA choice.
-	mustClick(t, tt, "Evidence")
+	mustClick(t, tt, "Samples for this fold")
 	mustClick(t, tt, "R1 reads")
 	csSettle(a, tt)
 	pl := p.plan()
@@ -306,10 +322,11 @@ func TestStructureMultiReferenceLayouts(t *testing.T) {
 	}
 }
 
-// The web's "Folding workflow" presets on the desktop's engines.
+// The web's "Folding workflow" presets: each sets the three steps, guided,
+// with CPLfold for one region and CPLcofold for two.
 func TestStructureWorkflowPresets(t *testing.T) {
 	_, _, tt, p := stSetupPage(t, 1400)
-	if p.workflow() != stWorkflowCustom || !tt.HasText("Folding workflow") || !tt.HasText("Custom engine and reference layout") {
+	if p.workflow() != stWorkflowCustom || !tt.HasText("Folding workflow") || !tt.HasText("Custom") {
 		t.Fatalf("workflow %q: %q", p.workflow(), tt.Texts())
 	}
 	p.gene = africaGene
@@ -317,15 +334,13 @@ func TestStructureWorkflowPresets(t *testing.T) {
 	p.region1, p.model = "1-45", "CC06"
 	p.applyWorkflow(stWorkflowLong)
 	tt.Frame()
-	if p.engine != engineCPLcofold || p.gene2 != africaGene || p.model != "DP09" || p.workflow() != stWorkflowLong {
+	if p.engine != engineCPLcofold || p.gene2 != africaGene || p.model != "DP09" || p.workflow() != stWorkflowLong || p.homodimerOnly {
 		t.Fatalf("long: %q %q %q %q", p.engine, p.gene2, p.model, p.workflow())
 	}
-	for _, text := range []string{"Two local regions of the same RNA · CPLcofold",
-		"With CPLfold selected, one-region presets run CPLfold; two-region presets run CPLcofold and preserve the selected reads, alpha, beta and pseudoknot settings. Same-RNA regions are folded as two excised fragments, with a strand break and no intervening reference sequence or artificial spacer."} {
-		if !tt.HasText(text) {
-			t.Fatalf("lacks %q: %q", text, tt.Texts())
-		}
-	}
+	mustHave(t, tt, "Long-range · two regions of one RNA · CPLcofold", "Two regions", "CPLcofold · Hyb2",
+		"Each preset sets Evidence, Regions and Algorithm. Short-range folds one region with CPLfold. Long-range (two regions of one RNA), "+
+			"intermolecular (two RNAs) and homodimer (the same region twice) fold two regions with CPLcofold, as two excised fragments "+
+			"with a strand break and no reference sequence or spacer between them. Choose COMRADES as the Algorithm afterwards to compare on the same regions.")
 	// editing the regions keeps the preset
 	p.region2 = "1086-1134"
 	tt.Frame()
@@ -335,7 +350,8 @@ func TestStructureWorkflowPresets(t *testing.T) {
 	// homodimer: region 2 copies region 1 and follows it
 	p.applyWorkflow(stWorkflowHomodimer)
 	tt.Frame()
-	if p.region2 != "1-45" || !tt.HasText("Homodimer (overlap ≥ 5)") {
+	if p.region2 != "1-45" || !p.homodimerOnly || !tt.HasText("Homodimer · the same region twice · CPLcofold") ||
+		!tt.HasText("Desktop CPLcofold has no homodimer filter") {
 		t.Fatalf("homodimer region 2 %q", p.region2)
 	}
 	p.region1 = "10-60"
@@ -371,33 +387,23 @@ func TestStructureWorkflowPresets(t *testing.T) {
 	if p.engine != engineCPLfold || p.mode != "windows" || p.windows != "10-60" {
 		t.Fatalf("short: %q %q %q", p.engine, p.mode, p.windows)
 	}
-	// changing the engine goes back to Custom, as the web
-	p.engine = engineVienna
-	p.engineChanged()
-	tt.Frame()
-	if p.workflow() != stWorkflowCustom || !tt.HasText("Long-ranged intramolecular") && !slices.Contains(stWorkflowLabels(false), "Long-ranged intramolecular") {
-		t.Fatalf("engine change kept %q", p.workflow())
+	// from sequence only, a preset sets the guided steps
+	stPick(t, tt, engineRNAcofold, true)
+	if p.workflow() != stWorkflowCustom {
+		t.Fatalf("a step change kept %q", p.workflow())
 	}
-	// ViennaRNA presets: COMRADES(ViennaRNA), two regions joined by the spacer
 	p.applyWorkflow(stWorkflowHomodimer)
 	tt.Frame()
-	if p.engine != engineComrades || p.mode != "paired" || !p.homodimerOnly || p.gene2 != p.gene || p.region2 != p.region1 {
-		t.Fatalf("ViennaRNA homodimer %q %q %v %q %q", p.engine, p.mode, p.homodimerOnly, p.region2, p.region1)
+	if p.engine != engineCPLcofold || p.src.kind != stSourceReference || p.gene2 != p.gene || p.region2 != p.region1 {
+		t.Fatalf("homodimer from sequence only %q %q %q %q", p.engine, p.src.kind, p.region2, p.region1)
 	}
-	for _, text := range []string{"Homodimer (overlap ≥ 5)", "ViennaRNA presets use HYB-guided evidence. Short-range uses one region; long-range uses two regions of the same RNA. Intermolecular uses two different RNAs; homodimer uses two copies of one RNA and overlap score ≥ 5. Paired layouts include the original 100 nt spacer."} {
-		if !tt.HasText(text) {
-			t.Fatalf("lacks %q: %q", text, tt.Texts())
-		}
-	}
-	snapshot(t, tt, "structure-workflow-vienna")
-	p.applyWorkflow(stWorkflowLong)
-	if p.homodimerOnly || p.mode != "paired" {
-		t.Fatalf("ViennaRNA long %v %q", p.homodimerOnly, p.mode)
-	}
-	p.applyWorkflow(stWorkflowShort)
+	snapshot(t, tt, "structure-workflow-homodimer")
+	// COMRADES afterwards: the same regions, joined by the spacer, with the
+	// homodimer proxy filter the preset set; the preset is Custom again
+	mustClick(t, tt, "COMRADES · for comparison")
 	tt.Frame()
-	if p.mode != "windows" || p.engine != engineComrades {
-		t.Fatalf("ViennaRNA short %q %q", p.mode, p.engine)
+	if p.engine != engineComrades || p.mode != "paired" || !p.homodimerOnly || p.region2 != p.region1 || p.workflow() != stWorkflowCustom {
+		t.Fatalf("COMRADES after the homodimer preset %q %q %v %q %q", p.engine, p.mode, p.homodimerOnly, p.region2, p.workflow())
 	}
 	// unticking the homodimer filter is a change of layout too
 	p.applyWorkflow(stWorkflowHomodimer)
@@ -641,7 +647,7 @@ func TestStructureResultLocalInputs(t *testing.T) {
 	}
 	snapshot(t, tt, "structure-result-provenance")
 	// sequence only in the form: nothing to compare
-	p.seqOnly = true
+	p.setSteps(false, false)
 	tt.Frame()
 	if slices.ContainsFunc(tt.Texts(), func(s string) bool { return strings.HasPrefix(s, "The HYB evidence has changed") }) {
 		t.Fatal("warning for a sequence-only form")

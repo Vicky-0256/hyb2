@@ -44,14 +44,15 @@ type TaskStartRequest struct {
 	GeneID      *string  `json:"gene_id,omitempty"`
 	Mode        *string  `json:"mode,omitempty"`
 	// Engine of a structure task: "cplfold" (default), "cplcofold" (mode
-	// "cofold", two Regions as two strands), "viennarna", "comrades"
+	// "cofold", two Regions as two strands), "viennarna" (ViennaRNA MFE;
+	// mode "cofold": RNAcofold of two Regions), "comrades"
 	// (COMRADES(ViennaRNA)) or "iris" (one region: genome, or one window).
 	Engine  *string  `json:"engine,omitempty"`
 	Windows []Window `json:"windows,omitempty"`
 	Regions []Region `json:"regions,omitempty"`
 	// Source of a structure task's sequence: "reference" (default, a region
 	// of the samples' reference), "paste" (Sequence, and SequenceTwo for
-	// CPLcofold's strand B) or "record" (Sequence is a HYB record's).
+	// strand B of mode "cofold") or "record" (Sequence is a HYB record's).
 	Source      *string  `json:"source,omitempty"`
 	SequenceTwo *string  `json:"sequence_two,omitempty"`
 	Workers     *uint32  `json:"workers,omitempty"`

@@ -15,6 +15,11 @@ from desktop.runtime.project import new_project
 
 ROOT = Path(__file__).resolve().parents[3]
 GENE = "TEST_virusRNA"
+# `RNAcofold --noconv --noPS` of ViennaRNA 2.7.2 (the pinned version) on
+# _sequence(240, seed=3)[:60] & _sequence(120, seed=8)[49:110]: the
+# structure, and its dG at 37 °C and at 30 °C (-T 30)
+RNACOFOLD_CLI = (".....................(((((((((....(((......)))((((((((......&"
+                 ".)))..)))))(((.(((..((.(((....))).))..))))))......)))))))))..", -33.90, -39.22)
 
 
 def _module():
@@ -702,6 +707,24 @@ class CofoldRunTests(unittest.TestCase):
         # as the web's: no eligible record mapped, rather than not attached
         arms = json.loads((self.project / "structures" / "co3" / "arms.json").read_text())
         self.assertEqual(arms["records"], [{"rows": 0, "unique": 0, "shown": []}])
+
+    def test_rnacofold_of_two_regions_matches_the_cli(self):
+        # engine "viennarna" of two regions: RNAcofold of region 1 & region 2, sequences alone
+        structure, energy, energy_30 = RNACOFOLD_CLI
+        regions = [(GENE, 1, 60), ("OTHER_RNA", 50, 110)]
+        result = self._run(regions, task_id="rc1", engine="viennarna")
+        self.assertTrue(result["ok"], result)
+        out = self.project / "structures" / "rc1"
+        self.assertEqual((out / "structure.dbn").read_text().splitlines(), [
+            f">{GENE}:1-60 + OTHER_RNA:50-110 RNAcofold MFE, 37 °C, min loop 3, energy {energy:.2f}",
+            self.one[:60] + "&" + self.two[49:110], structure])
+        meta = json.loads((out / "meta.json").read_text())
+        self.assertEqual((meta["engine"], meta["mode"], meta["records"][0]["energy"]), ("RNAcofold", "cofold", energy))
+        # the samples give the reference only: no chimera is read or mapped
+        self.assertEqual(meta["evidence_inputs"]["hyb"], [])
+        self.assertFalse((out / "arms.json").exists())
+        warm = self._run(regions, task_id="rc2", engine="viennarna", parameters={"temperature": 30})
+        self.assertEqual(warm["summary"]["energy"], energy_30)
 
     def test_omitted_numeric_task_parameters_match_web_after_range_change(self):
         from desktop.runtime import structure

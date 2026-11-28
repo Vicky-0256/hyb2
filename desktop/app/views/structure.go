@@ -599,9 +599,6 @@ type structurePage struct {
 	// pseudoknot setting it last showed (structure_fold.go whatToFold)
 	topology string
 	lastPK   bool
-	// seqOnly folds with CPLfold or CPLcofold from the sequence alone (the
-	// web's "sequence only" evidence mode).
-	seqOnly bool
 	// src is the sequence source: a reference region, a HYB record or
 	// pasted sequences (structure_fold.go).
 	src stSource
@@ -614,8 +611,8 @@ type structurePage struct {
 	model               string
 	// kernel is how the chimeras become the bonus matrix (stKernels); "" is the default
 	kernel string
-	// engine is engineCPLfold or engineVienna; the ViennaRNA settings
-	// (structure_vienna.go).
+	// engine is the Algorithm step (stAlgorithms, structure_fold.go); the
+	// ViennaRNA and COMRADES settings (structure_vienna.go).
 	engine               string
 	temperature, minLoop float64
 	hardPairs            string
@@ -714,7 +711,7 @@ func (p *structurePage) reset() {
 	p.gene, p.evidence, p.mode, p.windows = "", "", "genome", ""
 	p.referenceID, p.referenceID2, p.topReference = "", "", ""
 	p.topGene, p.topKey, p.pinned = "", "", nil
-	p.pseudoknot, p.seqOnly = cplSettings(p.engine == engineCPLcofold).Defaults.AllowPseudoknot, false
+	p.pseudoknot = cplSettings(p.engine == engineCPLcofold).Defaults.AllowPseudoknot
 	p.src = stSource{}
 	p.gene2, p.region1, p.region2 = "", "", ""
 	p.resetFoldSettings()
@@ -809,32 +806,27 @@ func (p *structurePage) applyOptions(opts map[string]any) {
 		switch {
 		case err != nil:
 		case prefill.Record != nil:
-			if p.engine == engineCPLcofold {
-				p.engine = engineCPLfold // a record is one strand
-				p.ensureEngineModel()
-			}
+			// a record's own sequence is one strand, folded from the sequence alone
+			p.setSteps(false, false)
 			if prefill.SelectionKey != "" {
 				p.evidence = prefill.SelectionKey
 			}
 			p.setSource(stSourceRecord)
 			p.src.recordsKey, p.src.record, p.src.pending = "", nil, prefill.Record // read the records again, then choose it
 			p.prefillNote = "Prefilled from " + nameOr(prefill.Source, "a fold request") +
-				" with the record's own sequence. Check the engine, then press Run fold below."
+				" with the record's own sequence, folded with ViennaRNA MFE from the sequence alone. Check the setup, then press Run fold below."
 		case len(prefill.Regions) == 2:
 			r1, r2 := prefill.Regions[0], prefill.Regions[1]
 			p.engine, p.gene, p.gene2 = engineCPLcofold, r1.GeneID, r2.GeneID
 			p.region1, p.region2 = fmt.Sprintf("%d-%d", r1.Start, r1.End), fmt.Sprintf("%d-%d", r2.Start, r2.End)
-			p.ensureEngineModel()
+			p.engineChanged()
 			if prefill.SelectionKey != "" {
 				p.evidence = prefill.SelectionKey
 			}
 			p.prefillNote = "Prefilled from " + nameOr(prefill.Source, "a fold request") +
 				" with both arms as two strands. Check the regions, then press Run fold below."
 		default:
-			if p.engine == engineCPLcofold {
-				p.engine = engineCPLfold // a window is one strand
-				p.ensureEngineModel()
-			}
+			p.setSteps(stGuidedEngine(p.engine), false) // a window is one region
 			if prefill.Gene != "" {
 				p.gene = prefill.Gene
 			}
@@ -1025,7 +1017,8 @@ func (p *structurePage) View(c *ui.Context) {
 		p.followTopBar(false) // the top bar changed while this page is shown
 	}
 	PageRoot(c).Children(func() {
-		PageHeader(c, "Structure", "Predict RNA secondary structure with CPLfold, CPLcofold or ViennaRNA, using your samples' chimeric reads as evidence, and compare structures.")
+		PageHeader(c, "Structure", "Fold one region or two: guided by your samples' chimeric reads with CPLfold or CPLcofold "+
+			"(COMRADES and IRIS for comparison), or from the sequence alone with ViennaRNA MFE or RNAcofold. Then compare the structures.")
 		// The form takes two fifths of a wide window. A narrow window
 		// puts it above the viewer in one scroll; a short one scrolls the
 		// check and Run fold with the form, which pinned below it would
@@ -1655,7 +1648,7 @@ func (p *structurePage) metaLine(a *structureResult) string {
 			m.Parameters["temperature"], m.Parameters["min_loop"], m.Parameters["random_folds"], m.Parameters["seed"], len(stHardPairs(a))))
 	} else if m.Engine == "IRIS" && m.Parameters != nil {
 		parts = append(parts, stIrisMetaLine(a))
-	} else if m.Engine == "ViennaRNA" && m.Parameters != nil {
+	} else if (m.Engine == "ViennaRNA" || m.Engine == "RNAcofold") && m.Parameters != nil {
 		text := fmt.Sprintf("MFE, %v °C, minimum loop %v", m.Parameters["temperature"], m.Parameters["min_loop"])
 		if n := len(stHardPairs(a)); n > 0 {
 			text += fmt.Sprintf(", %d hard pair%s", n, plural(n))

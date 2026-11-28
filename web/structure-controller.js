@@ -161,11 +161,18 @@
 
   function predict(state, api) {
     const structure = state.structure;
+    // A form from before the three setup steps folds as the page shows it
+    // (sequence-only CPLfold is ViennaRNA MFE or RNAcofold now).
+    if (structure && window.Hyb2Data && typeof window.Hyb2Data.normaliseStructureSetup === "function") {
+      window.Hyb2Data.normaliseStructureSetup(structure);
+    }
     const sequenceInfo = window.Hyb2Pages.getStructureSequence(state);
     const iris = structure && structure.engine === "iris";
     const hybGuided = !iris && structure && structure.constraintMode === "hyb-guided";
     const cplfold = structure && structure.engine === "cplfold";
     const cplfoldGuided = cplfold && structure.cplfoldEvidence === "hyb-blocks";
+    // Sequence only, two regions: ViennaRNA's RNAcofold folds the two strands.
+    const rnacofold = !!structure && !iris && !cplfold && !hybGuided && Number.isInteger(sequenceInfo.cutpoint) && sequenceInfo.cutpoint > 0;
 
     if (!structure || !sequenceInfo.sequence || sequenceInfo.error) {
       api.showToast(sequenceInfo.error || "Choose a valid RNA sequence first.");
@@ -207,7 +214,7 @@
     let constraints = [];
     let randomFoldCount, constraintLimit;
 
-    if (!cplfold && !iris && structure.constraintMode === "manual-hard-base-pairs") {
+    if (!cplfold && !iris && !rnacofold && structure.constraintMode === "manual-hard-base-pairs") {
       try {
         constraints = parseManualConstraints(structure.constraintText, sequenceInfo.sequence, minimumLoop);
         if (!constraints.length) {
@@ -254,7 +261,7 @@
     structure.progress = 2;
     structure.message = iris ? "Starting IRIS ensemble prediction…" : cplfold
       ? "Starting pure-Python CPLfold in a local Pyodide worker…"
-      : (hybGuided ? "Starting COMRADES(ViennaRNA)…" : "Starting ViennaRNA WebAssembly…");
+      : (hybGuided ? "Starting COMRADES(ViennaRNA)…" : rnacofold ? "Starting ViennaRNA RNAcofold…" : "Starting ViennaRNA WebAssembly…");
     structure.result = null;
     structure.runningSequenceInfo = sequenceInfo;
     api.render();
@@ -375,10 +382,15 @@
 
         if (message.type === "complete") {
           finishWorker(state, worker);
-          if (sequenceInfo.cutpoint && (!message.result || message.result.engine !== "CPLcofold" || message.result.cutpoint !== sequenceInfo.cutpoint || message.result.sequence !== sequenceInfo.sequence)) {
+          const twoStrandResult = message.result && (rnacofold
+            ? message.result.engine === "ViennaRNA" && message.result.algorithm === "RNAcofold"
+            : message.result.engine === "CPLcofold");
+          if (sequenceInfo.cutpoint && (!twoStrandResult || message.result.cutpoint !== sequenceInfo.cutpoint || message.result.sequence !== sequenceInfo.sequence)) {
             structure.runningSequenceInfo = null;
             structure.operation = null;
-            rejectInput(structure, api, new Error("The worker did not preserve the two RNA strands. Reload the current CPLcofold runtime."));
+            rejectInput(structure, api, new Error(rnacofold
+              ? "The ViennaRNA worker did not preserve the two RNA strands. Reload the page and predict again."
+              : "The worker did not preserve the two RNA strands. Reload the current CPLcofold runtime."));
             return;
           }
           const scoreIssue = pairGuided && pairScoreIssue(message.result, cplfoldParameters.supportKernel);
@@ -422,6 +434,8 @@
             ? message.result.engine + " completed locally with " + ((message.result.candidates || []).length) + " ranked candidate" + ((message.result.candidates || []).length === 1 ? "." : "s.")
             : message.result && message.result.constraintMode === "hyb-guided"
             ? "COMRADES(ViennaRNA) completed locally from " + (message.result.evidence ? message.result.evidence.inputRecords : 0) + " eligible HYB record" + ((message.result.evidence && message.result.evidence.inputRecords === 1) ? "." : "s.")
+            : message.result && message.result.algorithm === "RNAcofold"
+            ? "RNAcofold folded the two strands locally."
             : (constraintCount
               ? "ViennaRNA MFE structure predicted locally with " + constraintCount + " manual hard base-pair constraint" + (constraintCount === 1 ? "." : "s.")
               : "ViennaRNA MFE structure predicted locally.");
@@ -500,6 +514,12 @@
         constraintLimit: constraintLimit,
         randomFoldCount: randomFoldCount,
         seed: String(structure.randomSeed).trim()
+      } : rnacofold ? {
+        type: "cofold",
+        sequenceA: sequenceInfo.sequence.slice(0, sequenceInfo.cutpoint),
+        sequenceB: sequenceInfo.sequence.slice(sequenceInfo.cutpoint),
+        minimumLoop: minimumLoop,
+        temperature: temperature
       } : {
         type: "fold",
         sequence: sequenceInfo.sequence,
@@ -528,7 +548,7 @@
   function probeCplfoldCapacity(state, api) {
     const structure = state.structure;
     if (!structure || structure.engine !== "cplfold") {
-      api.showToast("Select CPLfold before measuring browser capacity.");
+      api.showToast("Choose CPLfold or CPLcofold as the Algorithm before measuring browser capacity.");
       return false;
     }
     if (nativeCplfoldActive(structure)) {
@@ -666,7 +686,7 @@
   function downloadCplfoldBonusMatrix(state, api, sequenceInfo, onComplete) {
     const structure = state.structure;
     if (!structure || structure.engine !== "cplfold") {
-      api.showToast("Select CPLfold before downloading a bonus matrix.");
+      api.showToast("Choose CPLfold or CPLcofold as the Algorithm before downloading a bonus matrix.");
       return false;
     }
     if (structure.status === "running") {

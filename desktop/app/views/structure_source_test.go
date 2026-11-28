@@ -23,72 +23,67 @@ func TestStructureSequenceSourceMinimumForm(t *testing.T) {
 		if injected {
 			pastedMin, sequenceMin = 8, 3
 		}
-		for _, engine := range []string{engineCPLfold, engineVienna, engineComrades} {
-			for _, tc := range []struct{ name, source, input, normalized string }{
-				{"seven", stSourcePaste, "\ufeff>seven & title\r\n1 a cgT a cg\n", "ACGUACG"},
-				{"four", stSourcePaste, ">long header does not count\n1 a c g t\n", "ACGU"},
-				{"boundary", stSourcePaste, ">boundary\n1 " + strings.Repeat("a ", pastedMin), strings.Repeat("A", pastedMin)},
-				{"empty", stSourceRecord, "", ""},
-				{"formatting-only", stSourceRecord, " \r\n\t ", ""},
-				{"singleton", stSourceRecord, " \r\n t ", "U"},
-				{"two", stSourceRecord, "a c", "AC"},
-				{"boundary", stSourceRecord, strings.Repeat(" a ", sequenceMin), strings.Repeat("A", sequenceMin)},
-			} {
-				t.Run(fmt.Sprintf("injected=%t/%s/%s/%s", injected, engine, tc.source, tc.name), func(t *testing.T) {
-					if injected {
-						stInjectFoldTextMinimums(t, 12, pastedMin, sequenceMin)
-					}
-					a, f, tt, p := stSetupPage(t, 2200)
-					if engine == engineVienna {
-						mustClick(t, tt, "ViennaRNA MFE, the sequence alone (optional hard pairs)")
-					} else if engine == engineComrades {
-						mustClick(t, tt, "COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras")
-					}
-					minimum, label := pastedMin, "The pasted sequence"
-					mustClick(t, tt, "Reference region")
-					if tc.source == stSourceRecord {
-						minimum, label = sequenceMin, "The record's sequence"
-						r := hybridRow{Name: "short-record", Sequence: tc.input, Reads: 1, Gene1: africaGene, Start1: 1, End1: 4,
-							Gene2: africaGene, Start2: 8, End2: 11}
-						f.queries["analysis_hybrids"] = core.Obj{"rows": []hybridRow{r}}
-						mustClick(t, tt, "HYB record sequence")
-						csSettle(a, tt)
-						mustClick(t, tt, "Choose a record")
-						mustClick(t, tt, stHybridLabel(r))
-					} else {
-						mustClick(t, tt, "Paste sequence")
-						mustClick(t, tt, "Paste RNA sequence")
-						tt.Type(tc.input)
-					}
-					tt.Frame()
-					problem := ""
-					if tc.source == stSourceRecord && tc.input == "" {
-						problem = "This record's sequence cannot be read"
-					} else if len(tc.normalized) < minimum {
-						problem = fmt.Sprintf("%s: at least %d nt.", label, minimum)
-					}
-					if problem != "" && !tt.HasText(problem) {
-						t.Errorf("missing precheck %q; got %v", problem, p.plan().problems)
-					}
-					mustClick(t, tt, "Run fold")
+		// pasted and record sequences are folded from the sequence alone
+		for _, tc := range []struct{ name, source, input, normalized string }{
+			{"seven", stSourcePaste, "\ufeff>seven & title\r\n1 a cgT a cg\n", "ACGUACG"},
+			{"four", stSourcePaste, ">long header does not count\n1 a c g t\n", "ACGU"},
+			{"boundary", stSourcePaste, ">boundary\n1 " + strings.Repeat("a ", pastedMin), strings.Repeat("A", pastedMin)},
+			{"empty", stSourceRecord, "", ""},
+			{"formatting-only", stSourceRecord, " \r\n\t ", ""},
+			{"singleton", stSourceRecord, " \r\n t ", "U"},
+			{"two", stSourceRecord, "a c", "AC"},
+			{"boundary", stSourceRecord, strings.Repeat(" a ", sequenceMin), strings.Repeat("A", sequenceMin)},
+		} {
+			t.Run(fmt.Sprintf("injected=%t/%s/%s", injected, tc.source, tc.name), func(t *testing.T) {
+				if injected {
+					stInjectFoldTextMinimums(t, 12, pastedMin, sequenceMin)
+				}
+				a, f, tt, p := stSetupPage(t, 2200)
+				stPick(t, tt, engineVienna, false)
+				minimum, label := pastedMin, "The pasted sequence"
+				mustClick(t, tt, "Reference region")
+				if tc.source == stSourceRecord {
+					minimum, label = sequenceMin, "The record's sequence"
+					r := hybridRow{Name: "short-record", Sequence: tc.input, Reads: 1, Gene1: africaGene, Start1: 1, End1: 4,
+						Gene2: africaGene, Start2: 8, End2: 11}
+					f.queries["analysis_hybrids"] = core.Obj{"rows": []hybridRow{r}}
+					mustClick(t, tt, "HYB record sequence")
 					csSettle(a, tt)
-					started := f.startedKinds()
-					t.Logf("engine=%s source=%s input=%q normalized=%q minimum=%d; StartTask calls=%d; problems=%q",
-						engine, tc.source, tc.input, tc.normalized, minimum, len(started), p.plan().problems)
-					if problem != "" {
-						if len(started) != 0 {
-							t.Fatal("short normalized sequence submitted a task")
-						}
-						return
+					mustClick(t, tt, "Choose a record")
+					mustClick(t, tt, stHybridLabel(r))
+				} else {
+					mustClick(t, tt, "Paste sequence")
+					mustClick(t, tt, "Paste RNA sequence")
+					tt.Type(tc.input)
+				}
+				tt.Frame()
+				problem := ""
+				if tc.source == stSourceRecord && tc.input == "" {
+					problem = "This record's sequence cannot be read"
+				} else if len(tc.normalized) < minimum {
+					problem = fmt.Sprintf("%s: at least %d nt.", label, minimum)
+				}
+				if problem != "" && !tt.HasText(problem) {
+					t.Errorf("missing precheck %q; got %v", problem, p.plan().problems)
+				}
+				mustClick(t, tt, "Run fold")
+				csSettle(a, tt)
+				started := f.startedKinds()
+				t.Logf("source=%s input=%q normalized=%q minimum=%d; StartTask calls=%d; problems=%q",
+					tc.source, tc.input, tc.normalized, minimum, len(started), p.plan().problems)
+				if problem != "" {
+					if len(started) != 0 {
+						t.Fatal("short normalized sequence submitted a task")
 					}
-					if len(started) != 1 || started[0].Source == nil || *started[0].Source != tc.source ||
-						started[0].Sequence == nil || *started[0].Sequence != tc.normalized || started[0].SequenceTwo != nil ||
-						started[0].Mode == nil || *started[0].Mode != "genome" {
-						t.Fatalf("valid normalized sequence was not submitted unchanged: %+v", started)
-					}
-					t.Logf("submitted sequence=%q, source=%s, mode=%s", *started[0].Sequence, *started[0].Source, *started[0].Mode)
-				})
-			}
+					return
+				}
+				if len(started) != 1 || started[0].Source == nil || *started[0].Source != tc.source ||
+					started[0].Sequence == nil || *started[0].Sequence != tc.normalized || started[0].SequenceTwo != nil ||
+					started[0].Mode == nil || *started[0].Mode != "genome" {
+					t.Fatalf("valid normalized sequence was not submitted unchanged: %+v", started)
+				}
+				t.Logf("submitted sequence=%q, source=%s, mode=%s", *started[0].Sequence, *started[0].Source, *started[0].Mode)
+			})
 		}
 	}
 }
@@ -111,7 +106,7 @@ func TestStructurePastedStrandMinimumForm(t *testing.T) {
 					stInjectFoldTextMinimums(t, 12, 8, minimum)
 				}
 				a, f, tt, p := stSetupPage(t, 2200)
-				mustClick(t, tt, "CPLcofold, two regions as two strands (one RNA or two RNAs)")
+				stPick(t, tt, engineRNAcofold, true)
 				mustClick(t, tt, "Reference region")
 				mustClick(t, tt, "Paste sequence")
 				mustClick(t, tt, "RNA A sequence (strand A)")
@@ -153,94 +148,6 @@ func TestStructurePastedStrandMinimumForm(t *testing.T) {
 	}
 }
 
-// A source change keeps the selected topology; changing it on the new source
-// updates the check, local command, budget gate and the task Run fold submits.
-func TestStructureSequenceSourceTopology(t *testing.T) {
-	// Long enough that the two claims differ even after the 4 GiB task minimum.
-	seq := strings.Repeat("ACGU", 1250)
-	free := core.StructureClaimMB(len(seq), false, 1)
-	knotted := core.StructureClaimMB(len(seq), true, 1)
-	if free >= knotted {
-		t.Fatalf("test needs different memory claims: %d >= %d", free, knotted)
-	}
-	for _, source := range []string{stSourcePaste, stSourceRecord} {
-		for _, allow := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/pseudoknots=%t", source, allow), func(t *testing.T) {
-				a, f, tt, p := stSetupPage(t, 2200)
-				p.budgetMB = free
-				if !allow {
-					mustClick(t, tt, stAllowKnots)
-				}
-				mustClick(t, tt, "Reference region")
-				if source == stSourcePaste {
-					mustClick(t, tt, "Paste sequence")
-					mustClick(t, tt, "Paste RNA sequence")
-					tt.Type(seq)
-					mustClick(t, tt, "Preview sequence · Pasted sequence")
-				} else {
-					r := hybridRow{Name: "test-read", Sequence: seq, Reads: 1, Gene1: "RNA A", Start1: 1, End1: 2500, Gene2: "RNA B", Start2: 1, End2: 2500}
-					f.queries["analysis_hybrids"] = core.Obj{"rows": []hybridRow{r}}
-					mustClick(t, tt, "HYB record sequence")
-					csSettle(a, tt)
-					mustClick(t, tt, "Choose a record")
-					mustClick(t, tt, stHybridLabel(r))
-					mustClick(t, tt, "Preview sequence · test-read · HYB record sequence")
-				}
-				check := func(pk bool) {
-					t.Helper()
-					tt.Frame()
-					mb := core.StructureClaimMB(len(seq), pk, 1)
-					for label, want := range map[string]bool{
-						"bin/cplfold --sequence-file": true, "--no-pseudoknot": !pk,
-						", pseudoknots allowed": pk, "Folded whole: no pseudoknots.": !pk,
-						fmt.Sprintf("about %.1f GB of the %.1f GB tasks may use", float64(mb)/1024, float64(free)/1024): true,
-						"This fold needs about": pk,
-					} {
-						if tt.HasText(label) != want {
-							t.Errorf("pseudoknots=%t: expected %q visible=%t", pk, label, want)
-						}
-					}
-				}
-				check(!allow) // inherited from the reference
-				if allow {
-					mustClick(t, tt, stAllowKnots)
-				} else {
-					mustClick(t, tt, stNoKnots)
-				}
-				check(allow)
-				if source == stSourceRecord {
-					snapshot(t, tt, fmt.Sprintf("structure-record-budget-pseudoknots-%t", allow))
-				}
-				wantMB := free
-				if allow {
-					mustClick(t, tt, "Run fold")
-					csSettle(a, tt)
-					if len(f.startedKinds()) != 0 {
-						t.Fatal("Run fold submitted an over-budget request")
-					}
-					p.budgetMB, wantMB = knotted, knotted
-					tt.Frame()
-				}
-				mustClick(t, tt, "Run fold")
-				csSettle(a, tt)
-				started := f.startedKinds()
-				if len(started) != 1 {
-					t.Fatalf("Run fold submitted %d tasks", len(started))
-				}
-				req := started[0]
-				if req.Source == nil || *req.Source != source || req.Sequence == nil || *req.Sequence != seq || req.MemMB == nil {
-					t.Fatal("Run fold did not submit the selected source, its sequence and a memory claim")
-				}
-				pk := req.Parameters.(map[string]any)["allow_pseudoknot"]
-				t.Logf("Run fold: source=%s, %d nt, allow_pseudoknot=%v, mem_mb=%d", *req.Source, len(*req.Sequence), pk, *req.MemMB)
-				if pk != allow || *req.MemMB != wantMB {
-					t.Fatalf("wanted allow_pseudoknot=%t, mem_mb=%d", allow, wantMB)
-				}
-			})
-		}
-	}
-}
-
 // Pasted inputs keep every selected sample, but the runtime still needs one
 // shared reference. Both submission routes must reject an invalid selection.
 func TestStructureSequenceReferenceAdmission(t *testing.T) {
@@ -273,7 +180,7 @@ func TestStructureSequenceReferenceAdmission(t *testing.T) {
 			if pl := p.plan(); len(pl.problems) != 0 || !slices.Equal(pl.req.SampleIDs, afr) {
 				t.Fatalf("reference-region filtering changed: ids=%v problems=%q", pl.req.SampleIDs, pl.problems)
 			}
-			mustClick(t, tt, "ViennaRNA MFE, the sequence alone (optional hard pairs)")
+			stPick(t, tt, engineVienna, false)
 			mustClick(t, tt, "Reference region")
 			mustClick(t, tt, "Paste sequence")
 			mustClick(t, tt, "Paste RNA sequence")
@@ -326,7 +233,7 @@ func TestStructureSequenceReferenceAdmission(t *testing.T) {
 					return
 				}
 				// Changing only evidence recovers; no sequence edit or sample filtering.
-				mustClick(t, tt, "Evidence")
+				mustClick(t, tt, "Samples for this fold")
 				mustClick(t, tt, "AFR · 2 datasets merged")
 				csSettle(a, tt)
 				ids = afr
@@ -351,16 +258,22 @@ func TestStructureSequenceReferenceAdmission(t *testing.T) {
 	}
 }
 
-// The web's "Paste sequence" source: one strand for CPLfold, ViennaRNA and
-// COMRADES, read as the web reads it, checked, and named in the task.
+// The web's "Paste sequence" source of a sequence-only fold: one strand
+// for ViennaRNA MFE, read as the web reads it, checked, and named in the
+// task. A guided fold reads a reference region only.
 func TestStructurePastedSequence(t *testing.T) {
 	a, f := openCS(t)
 	tt := ui.NewTester(a.View, 1100, 1300)
 	a.Navigate("structure", nil)
 	csSettle(a, tt)
 	p := a.PageFor("structure").(*structurePage)
-	if pl := p.plan(); pl.source != "" || pl.req.Source != nil {
-		t.Fatalf("a reference region by default: %q %v", pl.source, pl.req.Source)
+	if pl := p.plan(); pl.source != "" || pl.req.Source != nil || tt.HasText("Sequence source") {
+		t.Fatalf("a guided reference region by default: %q %v", pl.source, pl.req.Source)
+	}
+	mustClick(t, tt, "Sequence only")
+	tt.Frame()
+	if p.engine != engineVienna || !tt.HasText("Sequence source") {
+		t.Fatalf("sequence only: %q %q", p.engine, tt.Texts())
 	}
 	p.mode, p.windows = "windows", "1-400"
 	p.setSource(stSourcePaste)
@@ -368,12 +281,8 @@ func TestStructurePastedSequence(t *testing.T) {
 		t.Fatalf("a pasted sequence is folded whole, mode %q", p.mode)
 	}
 	tt.Frame()
-	for _, text := range []string{"1  Sequence source", "• Paste the RNA sequence to fold (A, C, G, U; T is read as U)."} {
-		if !tt.HasText(text) {
-			t.Fatalf("lacks %q: %q", text, tt.Texts())
-		}
-	}
-	if tt.HasText("1  RNA to fold") || tt.HasText("3  What to fold") {
+	mustHave(t, tt, "• Paste the RNA sequence to fold (A, C, G, U; T is read as U).")
+	if tt.HasText("RNA to fold") || tt.HasText("What to fold") {
 		t.Fatal("reference inputs shown for a pasted sequence")
 	}
 	for text, want := range map[string]string{
@@ -392,46 +301,32 @@ func TestStructurePastedSequence(t *testing.T) {
 	pl := p.plan()
 	if len(pl.problems) != 0 || *pl.req.Sequence != "GGGAAACCCUUUGGGAAACCC" || *pl.req.Source != "paste" ||
 		*pl.req.Mode != "genome" || *pl.req.GeneID != "pasted_sequence" || pl.req.SequenceTwo != nil || pl.memMB == 0 ||
-		len(pl.req.Windows) != 0 || pl.source != "pasted sequence, 21 nt" {
+		len(pl.req.Windows) != 0 || pl.source != "pasted sequence, 21 nt" || *pl.req.Engine != "viennarna" || pl.pk {
 		t.Fatalf("plan %+v %q %q", pl.req, pl.problems, pl.source)
 	}
 	tt.Frame()
-	for _, text := range []string{"the pasted sequence, 21 nt",
-		"• Chimeras guide the fold only if the sequence occurs exactly once in the samples' reference: it is then folded as that region. " +
-			"Otherwise it is folded from the sequence alone."} {
-		if !tt.HasText(text) {
-			t.Fatalf("lacks %q: %q", text, tt.Texts())
-		}
+	mustHave(t, tt, "the pasted sequence, 21 nt", "• ViennaRNA MFE folds the sequence alone; hard pairs are positions on it.")
+	if tt.HasText("Structure topology") || tt.HasText("Allow pseudoknots") {
+		t.Fatal("CPLfold topology shown for ViennaRNA MFE")
 	}
 	snapshot(t, tt, "structure-paste")
-	mustClick(t, tt, stAllowKnots)
-	tt.Frame()
-	mustHave(t, tt, "the pasted sequence, 21 nt, pseudoknots allowed")
-	snapshot(t, tt, "structure-paste-pseudoknots")
 	a.theme = "system" // the default light preference overrides the tester's appearance
 	tt.SetDark(true)
-	snapshot(t, tt, "structure-paste-pseudoknots-dark")
+	snapshot(t, tt, "structure-paste-dark")
 	tt.SetDark(false)
-	if err := tt.Click("Run fold"); err != nil {
-		t.Fatal(err)
-	}
+	mustClick(t, tt, "Run fold")
 	csSettle(a, tt)
 	started := f.startedKinds()
-	if len(started) != 1 || *started[0].Sequence != "GGGAAACCCUUUGGGAAACCC" || started[0].Parameters.(map[string]any)["evidence"] != nil {
+	if len(started) != 1 || *started[0].Sequence != "GGGAAACCCUUUGGGAAACCC" || *started[0].Engine != "viennarna" {
 		t.Fatalf("started %+v", started)
 	}
-	if got := stSourceTitle(engineCPLfold, pl.source, true); got != "Structure · pasted sequence, 21 nt · sequence only" {
+	if got := stSourceTitle(engineVienna, pl.source); got != "Structure (ViennaRNA) · pasted sequence, 21 nt" {
 		t.Fatalf("title %q", got)
 	}
-	// ViennaRNA: the sequence alone, hard pairs on it, its length limit
-	p.engine, p.hardPairs = engineVienna, "1-21"
-	tt.Frame()
-	if tt.HasText("Structure topology") || p.plan().pk {
-		t.Fatal("CPLfold topology leaked into ViennaRNA")
-	}
-	if pl := p.plan(); len(pl.problems) != 0 || *pl.req.Engine != "viennarna" || pl.req.Parameters.(map[string]any)["hard_pairs"] == nil ||
-		!slices.Contains(pl.limits, "ViennaRNA MFE folds the sequence alone; hard pairs are positions on it.") {
-		t.Fatalf("vienna %+v %q %q", pl.req, pl.problems, pl.limits)
+	// hard pairs are positions on the sequence; its length limit
+	p.hardPairs = "1-21"
+	if pl := p.plan(); len(pl.problems) != 0 || len(pl.req.Parameters.(map[string]any)["hard_pairs"].([][2]int)) != 1 {
+		t.Fatalf("hard pairs %+v %q", pl.req, pl.problems)
 	}
 	p.hardPairs = "1-40"
 	if pl := p.plan(); !slices.Contains(pl.problems, "Hard pair 1-40 is not inside a folded window.") {
@@ -441,15 +336,6 @@ func TestStructurePastedSequence(t *testing.T) {
 	if pl := p.plan(); !slices.Contains(pl.problems, "ViennaRNA MFE folds at most 30,000 nt; paste a shorter sequence.") {
 		t.Fatalf("vienna limit %q", pl.problems)
 	}
-	if got := stSourceTitle(engineVienna, "pasted sequence, 21 nt", true); got != "Structure (ViennaRNA) · pasted sequence, 21 nt" {
-		t.Fatalf("vienna title %q", got)
-	}
-	// COMRADES needs chimeras: only a region of the reference can run
-	p.engine = engineComrades
-	if pl := p.plan(); !slices.Contains(pl.problems, "COMRADES(ViennaRNA) folds at most 3,000 nt at a time, as the web: fold windows of that size.") ||
-		!strings.HasPrefix(pl.limits[0], "COMRADES(ViennaRNA) needs chimeras") {
-		t.Fatalf("comrades %q %q", pl.problems, pl.limits)
-	}
 	// a prefill names reference regions again
 	a.Navigate("structure", map[string]any{"prefill": map[string]any{"gene": africaGene,
 		"windows": []map[string]any{{"start": 3000, "end": 3400}}}})
@@ -457,34 +343,60 @@ func TestStructurePastedSequence(t *testing.T) {
 	if p.src.kind != stSourceReference || p.mode != "windows" {
 		t.Fatalf("prefill source %q mode %q", p.src.kind, p.mode)
 	}
+	// a guided algorithm reads a reference region only
+	p.setSource(stSourcePaste)
+	tt.Frame()
+	mustClick(t, tt, "Guided by HYB chimeras")
+	tt.Frame()
+	if p.engine != engineCPLfold || p.src.kind != stSourceReference || tt.HasText("Sequence source") {
+		t.Fatalf("guided: engine %q source %q", p.engine, p.src.kind)
+	}
 }
 
-// Two pasted strands for CPLcofold, as the web's RNA A and RNA B boxes.
+// Two pasted strands of a sequence-only fold for RNAcofold, as the web's
+// RNA A and RNA B boxes.
 func TestStructurePastedStrands(t *testing.T) {
-	a, _ := openCS(t)
+	a, f := openCS(t)
 	tt := ui.NewTester(a.View, 1100, 1300)
 	a.Navigate("structure", nil)
 	csSettle(a, tt)
 	p := a.PageFor("structure").(*structurePage)
-	p.engine = engineCPLcofold
+	mustClick(t, tt, "Sequence only")
+	tt.Frame()
+	mustClick(t, tt, "Two regions")
+	tt.Frame()
+	if p.engine != engineRNAcofold {
+		t.Fatalf("sequence only, two regions: %q", p.engine)
+	}
 	p.setSource(stSourcePaste)
 	tt.Frame()
-	if !tt.HasText("Allow pseudoknots") || tt.HasText("Structure topology") {
-		t.Fatal("CPLcofold should keep its own pseudoknot checkbox")
+	if tt.HasText("Allow pseudoknots") || tt.HasText("Structure topology") {
+		t.Fatal("RNAcofold folds without pseudoknots")
 	}
-	if !tt.HasText("• Paste RNA A and RNA B, or A&B in the RNA A box.") || tt.HasText("3  Region 2 (strand B)") {
+	if !tt.HasText("• Paste RNA A and RNA B, or A&B in the RNA A box.") || tt.HasText("Region 2 (strand B)") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 	p.src.pasted, p.src.pastedTwo = "GGGGAAAACCCC", "ggttttcccc"
 	pl := p.plan()
-	if len(pl.problems) != 0 || *pl.req.Mode != "cofold" || *pl.req.Engine != "cplcofold" || *pl.req.Sequence != "GGGGAAAACCCC" ||
+	if len(pl.problems) != 0 || *pl.req.Mode != "cofold" || *pl.req.Engine != "viennarna" || *pl.req.Sequence != "GGGGAAAACCCC" ||
 		*pl.req.SequenceTwo != "GGUUUUCCCC" || len(pl.req.Regions) != 0 || pl.span() != "12 + 10 nt" || pl.memMB == 0 ||
-		pl.source != "pasted RNA A + RNA B, 12 + 10 nt" || *pl.req.GeneID != "pasted" {
+		pl.source != "pasted RNA A + RNA B, 12 + 10 nt" || *pl.req.GeneID != "pasted" || pl.pk {
 		t.Fatalf("plan %+v %q %q", pl.req, pl.problems, pl.source)
 	}
+	if params := pl.req.Parameters.(map[string]any); len(params) != 2 || params["temperature"] != float64(37) || params["min_loop"] != 3 {
+		t.Fatalf("parameters %v", params)
+	}
 	tt.Frame()
-	if !tt.HasText("2 pasted strands, 12 + 10 nt") {
-		t.Fatalf("texts %q", tt.Texts())
+	mustHave(t, tt, "2 pasted strands, 12 + 10 nt", "RNAcofold, 37 °C, minimum loop 3",
+		"• RNAcofold folds the two strands from their sequences alone: the chimeric reads are not used.")
+	snapshot(t, tt, "structure-paste-rnacofold")
+	mustClick(t, tt, "Run fold")
+	csSettle(a, tt)
+	if started := f.startedKinds(); len(started) != 1 || *started[0].Mode != "cofold" || *started[0].SequenceTwo != "GGUUUUCCCC" {
+		t.Fatalf("started %+v", started)
+	}
+	if got := stSourceTitle(engineRNAcofold, pl.source); got != "Structure (RNAcofold) · pasted RNA A + RNA B, 12 + 10 nt" {
+		t.Fatalf("title %q", got)
 	}
 	// A&B in the first box
 	p.src.pasted, p.src.pastedTwo = ">label & 1\r1 GGGGAAAACCCC&ggttttcccc", ""
@@ -504,13 +416,12 @@ func TestStructurePastedStrands(t *testing.T) {
 		len(pl.problems) != 1 { // four bases are valid for the independent RNA B strand
 		t.Fatalf("problems %q", pl.problems)
 	}
-	// the energy models and beam CPLcofold supports apply to pasted strands too
-	p.src.pastedTwo, p.model = "GGUUUUCCCC", "CC06"
-	if pl := p.plan(); !slices.Contains(pl.problems, "CPLcofold uses the DP03 or DP09 energy model: choose one under Advanced settings.") {
-		t.Fatalf("model %q", pl.problems)
+	// both strands count towards ViennaRNA's longest sequence
+	p.src.pasted, p.src.pastedTwo = strings.Repeat("ACGU", stViennaMaxNT/4), "GGUUUUCCCC"
+	if pl := p.plan(); !slices.Contains(pl.problems, "Both strands are 30,010 nt; RNAcofold folds at most 30,000 nt in all.") {
+		t.Fatalf("length %q", pl.problems)
 	}
-	// a HYB record is not two strands: CPLcofold switches to pasting, as the web
-	p.model = "DP09"
+	// a HYB record is not two strands: RNAcofold switches to pasting, as the web
 	p.setSource(stSourceRecord)
 	p.engineChanged()
 	if p.src.kind != stSourcePaste {
@@ -527,6 +438,7 @@ func TestStructureRecordSequence(t *testing.T) {
 	a.Navigate("structure", nil)
 	csSettle(a, tt)
 	p := a.PageFor("structure").(*structurePage)
+	stPick(t, tt, engineVienna, false)
 	p.setSource(stSourceRecord)
 	csSettle(a, tt)
 	if len(p.src.records) == 0 || p.src.recordsErr != "" {
@@ -572,15 +484,18 @@ func TestStructureRecordPrefill(t *testing.T) {
 	a.Navigate("structure", nil)
 	csSettle(a, tt)
 	p := a.PageFor("structure").(*structurePage)
-	p.engine = engineCPLcofold
+	stPick(t, tt, engineVienna, false)
 	p.setSource(stSourceRecord)
 	csSettle(a, tt)
 	listed := p.src.records[1]
+	// from a guided two-region form: the record is one strand, sequence only
+	stPick(t, tt, engineCPLcofold, true)
 	a.Navigate("structure", map[string]any{"prefill": map[string]any{"record": listed, "source": "an interaction record"}})
 	csSettle(a, tt)
-	if p.src.kind != stSourceRecord || p.engine != engineCPLfold || p.src.record == nil || p.src.record.Name != listed.Name {
+	if p.src.kind != stSourceRecord || p.engine != engineVienna || p.src.record == nil || p.src.record.Name != listed.Name {
 		t.Fatalf("source %q engine %q record %+v", p.src.kind, p.engine, p.src.record)
 	}
+	mustHave(t, tt, "Prefilled from an interaction record with the record's own sequence, folded with ViennaRNA MFE from the sequence alone.")
 	other := listed
 	other.ID, other.Name, other.Sequence = 99999, "not_listed", "GGGGAAACCCCAAAGGGGAAACCCC"
 	a.Navigate("structure", map[string]any{"prefill": map[string]any{"record": other}})

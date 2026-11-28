@@ -373,18 +373,18 @@
     }
     if (action === "structure-use-hyb-evidence") {
       // Back from the default setup's sequence-only fallback (analysis-pages.js
-      // syncDefaultStructureEvidence). From here the evidence mode is the
+      // syncDefaultStructureEvidence): Evidence guided by the HYB chimeras,
+      // with the regions' Hyb2 algorithm. From here the evidence is the
       // user's own, so Predict waits for a region that holds HYB rows.
       if (!state.structure || state.structure.status === "running") return true;
       if (window.Hyb2Structure) window.Hyb2Structure.reset(state, { clearConstraints: true });
       delete state.structure.evidenceFallback;
       state.structure.evidenceChosen = true;
-      state.structure.cplfoldEvidence = "hyb-blocks";
-      state.structure.source = "reference";
+      window.Hyb2Data.setStructureSteps(state.structure, { evidence: "guided" });
       api.render();
       // the button is gone: focus moves to the control it changed
       const control = typeof document !== "undefined" && typeof document.querySelector === "function"
-        ? document.querySelector('[data-feature="structure-control"][data-key="cplfoldEvidence"]') : null;
+        ? document.querySelector('[data-feature="structure-control"][data-key="stepEvidence"]') : null;
       if (control && typeof control.focus === "function") control.focus();
       return true;
     }
@@ -626,7 +626,7 @@
 
   function downloadLocalCplfoldInput(state, api) {
     if (!state.structure || state.structure.engine !== "cplfold") {
-      api.showToast("Select CPLfold before downloading a local input.");
+      api.showToast("Choose CPLfold or CPLcofold as the Algorithm before downloading local inputs.");
       return true;
     }
 
@@ -670,7 +670,7 @@
       // Only the result's separate matrix export uses historical evidence. Wait for both current inputs.
       window.Hyb2Structure.downloadCplfoldBonusMatrix(state, api, prepared, downloadInputs);
     } else {
-      api.showToast("The local CPLfold bonus-matrix exporter is unavailable in this browser. Reload the page, or set Experimental evidence to Sequence only to download the FASTA alone.");
+      api.showToast("The local CPLfold bonus-matrix exporter is unavailable in this browser. Reload the page, or use Download FASTA under Preview sequence for the sequence alone.");
     }
     return true;
   }
@@ -844,6 +844,8 @@
           ? "RNAcofold evidence supplied the ranked stem constraints and COMRADES structure scores. " + (result.evidence?.scoringVersion === "all-pairs-capped-v1" ? "Scores use all eligible pairs with both orientations combined. Each paired endpoint contributes up to " + window.Hyb2Comrades.scoreCapLabel() + "; drawing colours use the full raw counts." : "The scoring version was not recorded; scores are reported as saved.")
           : constraintCount
           ? "The listed hard base pairs were entered manually by the user and enforced by ViennaRNA before MFE folding. They were not inferred from HYB or RNAcofold evidence."
+          : result.algorithm === "RNAcofold"
+          ? "This is an unconstrained ViennaRNA RNAcofold fold of strands A and B, as RNAcofold --noconv --noPS: the minimum-free-energy structure of the two-strand dimer. No HYB evidence was used."
           : "This is an unconstrained ViennaRNA global MFE fold. No HYB or RNAcofold evidence-derived constraints were generated."
       }
     };

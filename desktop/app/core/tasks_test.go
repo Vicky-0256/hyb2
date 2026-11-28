@@ -332,7 +332,7 @@ func TestStructureRegionCoordinatesArePositiveClosedIntervals(t *testing.T) {
 		{"second-reversed", []Region{{"A", 1, 4}, {"B", 8, 5}}, "",
 			"structure region B:8-5 must have 1 <= start <= end"},
 	}
-	for _, protocol := range []struct{ engine, mode string }{{"cplcofold", "cofold"}, {"comrades", "paired"}} {
+	for _, protocol := range []struct{ engine, mode string }{{"cplcofold", "cofold"}, {"viennarna", "cofold"}, {"comrades", "paired"}} {
 		for _, tc := range cases {
 			t.Run(protocol.engine+"/"+tc.name, func(t *testing.T) {
 				request := TaskStartRequest{ProjectPath: "/p", Kind: "structure", SampleIDs: []string{"sample"},

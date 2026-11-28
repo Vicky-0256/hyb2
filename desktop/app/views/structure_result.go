@@ -541,6 +541,8 @@ func (p *structurePage) nucleotideInspector(c *ui.Context, a *structureResult, r
 		what = stEngine(a) + " structure"
 	} else if stEngine(a) == "IRIS" {
 		what = "IRIS ensemble member"
+	} else if stEngine(a) == "RNAcofold" {
+		what = "RNAcofold MFE structure"
 	}
 	ui.Column(c).Gap(Space1).Padding(Space2, Space3).Radius(RadiusSmall).Border(1, t.Border).Children(func() {
 		ui.Text(c, "NUCLEOTIDE INSPECTOR").FontSize(11).Bold().TextColor(t.TextMuted)
@@ -685,6 +687,8 @@ func stComputedScope(a *structureResult) string {
 			return "ViennaRNA minimum-free-energy fold on this computer, with the hard pairs you entered."
 		}
 		return "ViennaRNA minimum-free-energy fold on this computer, without base-pair constraints."
+	case "RNAcofold":
+		return "ViennaRNA RNAcofold minimum-free-energy fold of the two strands on this computer, from their sequences alone."
 	}
 	return ""
 }

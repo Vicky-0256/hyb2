@@ -16,7 +16,8 @@ Folding energies need the ViennaRNA build in web/vendor/viennarna (not in git); 
 it they are skipped with a warning.
 
 Page "structure-result" swaps both folding workers for scripts/verify/ui-fake-structure-worker.js
-(screenshots only; the app never loads it), chooses CPLfold on region 1-201, clicks the
+(screenshots only; the app never loads it), sets Evidence "Guided by HYB chimeras", Regions
+"One region" and Algorithm CPLfold on region 1-201, clicks the
 capacity test and Predict, saves <mode>_structure-result_landing-view.png as the page
 stands when the result arrives, then the usual shots, and prints the layout metrics
 capacity_top, diagram_top, diagram_w and candidates_overflow (px).
@@ -98,9 +99,11 @@ def reveal(page):
 
 def structure_result(page, out, mode):
     page.evaluate("location.hash = '#/workspace/structure'")
-    page.locator('[data-key="engine"]').wait_for(timeout=60000)
-    page.locator('select[data-key="engine"]').select_option("cplfold")
-    page.wait_for_timeout(400)
+    page.locator('[data-key="stepAlgorithm"]').wait_for(timeout=60000)
+    # the three setup steps: guided by the HYB chimeras, one region, CPLfold
+    for key, value in (("stepEvidence", "guided"), ("stepRegions", "one"), ("stepAlgorithm", "cplfold")):
+        page.locator('select[data-key="%s"]' % key).select_option(value)
+        page.wait_for_timeout(400)
     for key, value in (("start", "1"), ("end", "201")):
         field = page.locator('input[data-key="%s"]' % key)
         if field.count():

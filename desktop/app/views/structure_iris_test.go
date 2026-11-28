@@ -77,7 +77,7 @@ func TestStructureIrisForm(t *testing.T) {
 	}
 	p.mode, p.windows = "windows", "1-200"
 	csSettle(a, tt)
-	for _, text := range []string{"IRIS · evidence-guided ensemble", "IRIS source", "Licence", "Predict IRIS ensemble",
+	for _, text := range []string{"IRIS · for comparison", "IRIS source", "Licence", "Predict IRIS ensemble",
 		"IRIS requires HYB evidence inside the selected reference region.",
 		"HYB evidence: 900 loaded; 850 with both arms on this RNA; 850 with forward coordinates; 0 fully inside this region.",
 		"Use nearby HYB-supported region " + africaGene + ":3001-4000",

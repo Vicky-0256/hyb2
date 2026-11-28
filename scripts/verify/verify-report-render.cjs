@@ -252,6 +252,34 @@ twoRegionState.structure.result.sourceSegments = [
   { rna: "RNA_B", referenceStart: 7, referenceEnd: 8, preparedStart: 3, preparedEnd: 4 }];
 const twoRegionHtml = report.render(twoRegionState);
 assert.match(twoRegionHtml, /<dt>Region 1 RNA<\/dt>\s*<dd[^>]*>RNA_A<\/dd>[\s\S]*<dt>Region 1 range<\/dt>\s*<dd[^>]*>1-2<\/dd>[\s\S]*<dt>Region 2 RNA<\/dt>\s*<dd[^>]*>RNA_B<\/dd>[\s\S]*<dt>Region 2 range<\/dt>\s*<dd[^>]*>7-8<\/dd>/, "both regions in the Setup card");
+// RNAcofold (sequence only, two regions): ViennaRNA's two-strand result is
+// reported as CPLcofold's, without a candidate table; before a result the
+// Setup names the algorithm chosen.
+const rnacofoldState = JSON.parse(JSON.stringify(cofoldState));
+Object.assign(rnacofoldState.structure, { engine: "viennarna", constraintMode: "none", cplfoldMode: "cofold", evidenceLayout: "paired" });
+Object.assign(rnacofoldState.structure.result, { engine: "ViennaRNA", algorithm: "RNAcofold", constraintMode: "none", energyMetadata: null });
+delete rnacofoldState.structure.result.candidates;
+const rnacofoldHtml = report.render(rnacofoldState);
+assert.match(rnacofoldHtml, /<dt>Engine<\/dt>\s*<dd[^>]*>ViennaRNA · RNAcofold<\/dd>/);
+assert.match(rnacofoldHtml, /AC&amp;GU/);
+assert.match(rnacofoldHtml, /\(\(&amp;\)\)/);
+assert.match(rnacofoldHtml, /Two RNA strands/);
+assert.match(rnacofoldHtml, /<dt>HYB evidence<\/dt>\s*<dd[^>]*>None \(sequence only\)<\/dd>/);
+assert.doesNotMatch(rnacofoldHtml, /CPLfold candidates/);
+rnacofoldState.structure.result = null;
+rnacofoldState.structure.status = "idle";
+{
+  // the steps come from the page's analysis-data.js; this file's Hyb2Data is a stand-in
+  const sandbox = vm.createContext({ window: {} });
+  for (const file of ["support-kernels.js", "analysis-data.js"]) {
+    vm.runInContext(fs.readFileSync(path.join(repository, "web", file), "utf8"), sandbox, { filename: file });
+  }
+  context.window.Hyb2Data.structureSteps = sandbox.window.Hyb2Data.structureSteps;
+  try {
+    assert.match(report.render(rnacofoldState), /<dt>Engine<\/dt>\s*<dd[^>]*>RNAcofold<\/dd>/);
+  } finally { delete context.window.Hyb2Data.structureSteps; }
+}
+assert.equal(report.getData(rnacofoldState).analyses.structure.setup.cplfoldEvidence, null, "a ViennaRNA setup has no CPLfold evidence");
 assert.match(html, /<dt>RNA<\/dt>\s*<dd[^>]*>-<\/dd>[\s\S]*<dt>Range<\/dt>\s*<dd[^>]*>-<\/dd>/,
   "a saved result without source coordinates does not borrow the current form's RNA or range");
 assert.doesNotMatch(html, /<dt>Region 2 RNA<\/dt>/);

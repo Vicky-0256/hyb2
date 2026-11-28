@@ -26,9 +26,7 @@ func TestStructureComradesMfold(t *testing.T) {
 	a.Navigate("structure", nil)
 	csSettle(a, tt)
 	p := a.PageFor("structure").(*structurePage)
-	if err := tt.Click("COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras"); err != nil {
-		t.Fatal(err)
-	}
+	stPick(t, tt, engineComrades, false)
 	p.advancedOpen, p.mode, p.windows, p.temperature = true, "windows", "2800-3300", 25
 	tt.Frame()
 	if !tt.HasText("Fits the stems with ViennaRNA's constrained MFE, as the web.") {

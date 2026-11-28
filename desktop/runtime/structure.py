@@ -15,7 +15,8 @@ Two modes share one request shape::
   CPLcofold: ``"regions": [{"gene_id", "start", "end"}, {...}]``, of one RNA
   or of two RNAs of the samples' reference.  The evidence is every chimera
   with one arm in each region, or both arms in one region, as the web's
-  two-region CPLcofold layout.
+  two-region CPLcofold layout.  With engine ``viennarna`` the two regions
+  are folded with RNAcofold from their sequences alone.
 * ``windows`` folds each window separately (pseudoknot-free by default, as
   the whole RNA; ``allow_pseudoknot`` turns pseudoknots on), with the
   chimeras whose two arms both lie inside that window, in a process pool: one window per process, ``numba.set_num_threads(1)``, and
@@ -25,7 +26,7 @@ Two modes share one request shape::
 sequence-only CPLfold); the samples then only give the reference.
 
 ``"source": "paste" | "record"`` folds a pasted or HYB record ``sequence``
-(CPLcofold: ``sequence_two``) instead of a reference region; see
+(two strands: ``sequence_two``) instead of a reference region; see
 :func:`_sequence_source` for when its chimeras are used.
 
 The .hyb files are streamed in the sidecar; arms never pass through the
@@ -326,8 +327,8 @@ def _locate_strands(strands: List[str], inputs: Dict[str, Any]) -> List[Tuple[st
 
 def _sequence_source(request: Dict[str, Any], project: Path, engine: str,
                      mode: str) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
-    """A pasted or HYB record sequence (``sequence``, and for CPLcofold
-    ``sequence_two`` or one "A&B" sequence).  As the web, chimeras guide only
+    """A pasted or HYB record sequence (``sequence``, and for two strands,
+    CPLcofold or RNAcofold, ``sequence_two`` or one "A&B" sequence).  As the web, chimeras guide only
     the fold of a reference region: when evidence is asked for and every
     strand identifies one position and one HYB RNA, it is folded as that
     region (one window, or CPLcofold's two regions); otherwise from the
@@ -344,7 +345,7 @@ def _sequence_source(request: Dict[str, Any], project: Path, engine: str,
     if engine == "iris":
         raise ValueError("IRIS uses one reference region with HYB evidence: choose Reference region")
     if mode not in ("genome", "cofold") or request.get("windows") or request.get("regions"):
-        raise ValueError("a pasted or HYB record sequence is folded whole, or as two strands with CPLcofold")
+        raise ValueError("a pasted or HYB record sequence is folded whole, or as two strands (mode 'cofold')")
     first = fold_text(request.get("sequence"), pasted=source == "paste")
     second = fold_text(request["sequence_two"], pasted=source == "paste") if request.get("sequence_two") is not None else ""
     if mode == "cofold":
@@ -357,7 +358,7 @@ def _sequence_source(request: Dict[str, Any], project: Path, engine: str,
             first, second = parts
         strands = [first, second]
     elif second:
-        raise ValueError("sequence_two is only for CPLcofold")
+        raise ValueError("sequence_two is only for two strands (mode 'cofold')")
     else:
         strands = [first]
     what = "pasted sequence" if source == "paste" else "HYB record sequence"
@@ -385,8 +386,7 @@ def _sequence_source(request: Dict[str, Any], project: Path, engine: str,
         return out, recorded
     if engine == "comrades":
         raise ValueError(f"COMRADES needs the chimeras of a reference region, and the {what} does not identify "
-                         "a unique reference region and HYB RNA: fold it with ViennaRNA MFE or sequence-only CPLfold, "
-                         "or choose Reference region")
+                         "a unique reference region and HYB RNA: fold it with ViennaRNA MFE, or choose Reference region")
     if guided:
         out["parameters"] = {**params, "evidence": "none"}
         recorded["evidence"] = "none: the sequence does not identify a unique reference region and HYB RNA"
@@ -678,6 +678,8 @@ def _describe(params: Dict[str, Any]) -> str:
     if params.get("engine") == "ViennaRNA":
         hard = f", {len(params['hard_pairs'])} hard pairs" if params.get("hard_pairs") else ""
         return f"ViennaRNA MFE, {params['temperature']:g} °C, min loop {params['min_loop']}{hard}"
+    if params.get("engine") == "RNAcofold":
+        return f"RNAcofold MFE, {params['temperature']:g} °C, min loop {params['min_loop']}"
     mode = "pseudoknot" if params["allow_pseudoknot"] else "pseudoknot-free"
     name = "CPLcofold" if params.get("engine") == "CPLcofold" else "CPLfold"
     if params.get("evidence") == "none":
@@ -833,8 +835,10 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     engine = request.get("engine", "cplfold")
     if engine not in {"cplfold", "cplcofold", "viennarna", "comrades", "iris"}:
         raise ValueError("engine must be 'cplfold', 'cplcofold', 'viennarna', 'comrades' or 'iris'")
-    if (engine == "cplcofold") != (mode == "cofold"):
-        raise ValueError("mode 'cofold' goes with engine 'cplcofold'")
+    if engine == "cplcofold" and mode != "cofold":
+        raise ValueError("engine 'cplcofold' goes with mode 'cofold'")
+    if mode == "cofold" and engine not in ("cplcofold", "viennarna"):
+        raise ValueError("mode 'cofold' goes with engine 'cplcofold', or 'viennarna' (RNAcofold)")
     if mode == "paired" and engine != "comrades":
         raise ValueError("mode 'paired' goes with engine 'comrades'")
     if mode not in {"genome", "windows", "cofold", "paired"}:
@@ -1050,9 +1054,12 @@ def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str,
     """ViennaRNA MFE (engine "viennarna", vienna.py: the samples only give the
     reference) or COMRADES(ViennaRNA) (engine "comrades", comrades.py: their
     chimeras inside each window are the evidence) of the whole RNA or each
-    window."""
+    window; two regions go to :func:`_paired_run` (COMRADES) or
+    :func:`_rnacofold_run` (ViennaRNA)."""
     if mode == "paired":
         return _paired_run(request, project, task_id, state, started)
+    if mode == "cofold":
+        return _rnacofold_run(request, project, task_id, state, started)
     comrades = engine == "comrades"
     params = (_comrades if comrades else _vienna).parameters(request.get("parameters"))
     inputs = _evidence_inputs(project, request)
@@ -1294,7 +1301,7 @@ def _finish_two_strand(*, task_id: str, mode: str, engine: str, engine_version: 
                        stored: Dict[str, Any], inputs: Dict[str, Any], hyb_used: bool, rows: str,
                        extra_record: Dict[str, Any], extra_meta: Dict[str, Any], timings: Dict[str, float],
                        fold_seconds: float) -> Dict[str, Any]:
-    """Write a two-strand result (CPLcofold, or COMRADES of two regions):
+    """Write a two-strand result (CPLcofold, RNAcofold, or COMRADES of two regions):
     the files, meta.json, result.json and the project.json entry."""
     progress("write", "writing results", None, None, units="none", force=True)
     outputs = _write_cofold_outputs(out_dir, regions, record, stored)
@@ -1535,6 +1542,42 @@ def _paired_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
         fold_seconds=fold_seconds)
 
 
+def _rnacofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dict[str, Any],
+                   started: float) -> Dict[str, Any]:
+    """RNAcofold (engine "viennarna", mode "cofold"): two regions, or two
+    pasted sequences, folded as two strands from their sequences alone, as
+    the web's sequence-only two-region fold.  The samples only give the
+    reference; no chimera is read."""
+    params = _vienna.parameters(request.get("parameters"))
+    if params["hard_pairs"]:
+        raise ValueError("hard pairs apply to ViennaRNA MFE of one region, not to RNAcofold")
+    inputs = _evidence_inputs(project, request)
+    regions = _two_regions(request, inputs, cofold=True)
+    one, two = regions[0]["sequence"], regions[1]["sequence"]
+    if len(one) + len(two) > _vienna.MAX_VIENNA_NT:
+        raise ValueError(f"{len(one) + len(two)} nt exceeds the RNAcofold limit of {_vienna.MAX_VIENNA_NT} nt; "
+                         "choose shorter regions")
+
+    run_dir = _resolve_run_dir(project, task_id, request.get("run_dir"))
+    state.update(run_dir=run_dir, task_id=task_id)
+    out_dir = _real_child_dir(project / "structures", task_id, exist_ok=True)
+    progress = ProgressWriter(run_dir)
+    progress.work = {"lengths": [len(one) + len(two)], "engine": "viennarna", "workers": 1}
+    progress("fold", "folding", 0, 1, units="windows", force=True)
+    t0 = time.monotonic()
+    folded = _vienna.cofold(one, two, params)
+    fold_seconds = time.monotonic() - t0
+    record = dict(folded, sequence=one + two, start=1, end=len(one) + len(two))
+    return _finish_two_strand(
+        task_id=task_id, mode="cofold", engine="RNAcofold", engine_version=_vienna.version(),
+        run_dir=run_dir, out_dir=out_dir, progress=progress, regions=regions, record=record,
+        stored={"engine": "RNAcofold", "temperature": params["temperature"], "min_loop": params["min_loop"]},
+        inputs=inputs, hyb_used=False, rows="none: RNAcofold uses the two sequences only",
+        extra_record={}, extra_meta={},
+        timings={"evidence_s": 0.0, "fold_s": round(fold_seconds, 2), "total_s": round(time.monotonic() - started, 2)},
+        fold_seconds=fold_seconds)
+
+
 def structure_run(request: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, Any]:
     """Bridge entry point.  Invalid requests raise ``ValueError``; failures after
     the run directory exists are reported in ``result.json`` and returned."""
@@ -1702,7 +1745,7 @@ def _record_extras(project: Path, entry: Dict[str, Any], meta: Dict[str, Any], c
 
 def _read_cofold(entry: Dict[str, Any], meta: Dict[str, Any], parsed: List[Dict[str, Any]],
                  bonus: PairBonus) -> Dict[str, Any]:
-    """A two-strand result (CPLcofold, or COMRADES of two regions): one
+    """A two-strand result (CPLcofold, RNAcofold, or COMRADES of two regions): one
     record over A+B, with ``positions`` (where
     each nucleotide is drawn, see :func:`cofold_positions`), ``cutpoint`` and
     the two ``segments``; ``pairs`` are in those positions."""

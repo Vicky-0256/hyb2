@@ -67,7 +67,7 @@ func TestStructureDuplexKernelNeedsNoProgram(t *testing.T) {
 			t.Fatalf("cplfold sends %s: %v", key, params)
 		}
 	}
-	for _, engine := range []string{engineVienna, engineComrades, engineIRIS} {
+	for _, engine := range []string{engineVienna, engineRNAcofold, engineComrades, engineIRIS} {
 		p.engine = engine
 		p.engineChanged()
 		pl := p.plan()
@@ -95,7 +95,7 @@ func TestStructureReadSupportPicker(t *testing.T) {
 	click("Advanced settings")
 	for _, engine := range []string{engineCPLfold, engineCPLcofold} {
 		if engine == engineCPLcofold {
-			click("CPLcofold, two regions as two strands (one RNA or two RNAs)")
+			click("Two regions") // guided: CPLcofold
 		}
 		if !tt.HasText("Gaussian around arm centres · IRIS (default)") {
 			t.Fatalf("%s did not show the default kernel", engine)
@@ -106,11 +106,6 @@ func TestStructureReadSupportPicker(t *testing.T) {
 		if pl := p.plan(); !tt.HasText("Choose read support") || !strings.Contains(strings.Join(pl.problems, " "), `Read support "rnacofold" is unavailable`) {
 			t.Fatalf("%s stale selection: %v", engine, pl.problems)
 		}
-		p.seqOnly = true
-		if pl := p.plan(); len(pl.problems) != 0 || pl.req.Parameters.(map[string]any)["support_kernel"] != nil {
-			t.Fatalf("%s sequence-only request retained its hidden stale kernel: params=%v problems=%v", engine, pl.req.Parameters, pl.problems)
-		}
-		p.seqOnly = false
 		for _, option := range []struct{ label, kernel string }{
 			{"Full arm blocks", "block"}, {"Full arm blocks ÷ √(arm lengths)", "block-normalized"},
 			{"RNAduplex pairs, saturating", "duplex"}, {"COMRADES (RNAcofold), saturating", "comrades"},

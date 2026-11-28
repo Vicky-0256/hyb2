@@ -129,7 +129,7 @@ PYTHONPATH=pipeline python3 -m hyb2analysis compare --one A1.hyb A2.hyb --two B1
 With `-i`, it reads the files and their conditions from a table instead, as in [`data/hyb2_compare_input.table`](data/hyb2_compare_input.table). `--help` after a command lists its options, and [`pipeline/README.md`](pipeline/README.md) describes every output.
 
 ## Structure algorithms
-Hyb2's own structure algorithms are CPLfold and CPLcofold. COMRADES and IRIS, two other algorithms that fold structures from chimeras, are included so that you can compare their structures with Hyb2's, and ViennaRNA's MFE fold of the sequence alone is the control. The table shows what each one folds, and the longest sequence that it folds in each interface:
+Hyb2's own structure algorithms are CPLfold and CPLcofold. COMRADES and IRIS, two other algorithms that fold structures from chimeras, are included so that you can compare their structures with Hyb2's, and ViennaRNA's MFE fold of the sequence alone (RNAcofold for two regions) is the control. The table shows what each one folds, and the longest sequence that it folds in each interface:
 
 | Algorithm | Role | Folds | Web app | Desktop app | Command line |
 |---|---|---|---|---|---|
@@ -137,12 +137,22 @@ Hyb2's own structure algorithms are CPLfold and CPLcofold. COMRADES and IRIS, tw
 | **CPLcofold** | Hyb2's own | Two regions as two strands: of one RNA, of two RNAs, or two copies of one region (homodimer) | 500 nt in all | Limited by memory (Preferences) | `bin/cplcofold`, 1,000 nt in all |
 | COMRADES | Other, for comparison | One region, or two joined by a 100-nt spacer | 2,000 nt; 3,000 if you confirm | 3,000 nt | `bin/comrades`, 3,000 nt |
 | IRIS | Other, for comparison | One region | 300 nt | 1,000 nt | `bin/iris`, 1,000 nt |
-| ViennaRNA MFE | Control | The sequence alone, without the chimeras | 2,000 nt; 3,000 if you confirm | 30,000 nt | — |
+| ViennaRNA MFE | Control | One region, from its sequence alone | 2,000 nt; 3,000 if you confirm | 30,000 nt | — |
+| RNAcofold | Control | Two regions as two strands, from their sequences alone | 2,000 nt in all; 3,000 if you confirm | 30,000 nt in all | — |
+
+Both apps set up a fold in three steps: **Evidence** (guided by the HYB chimeras, or the sequence only), **Regions** (one or two), and the **Algorithm** that those two allow:
+
+| Evidence | One region | Two regions |
+|---|---|---|
+| Guided by HYB chimeras | **CPLfold** (default), COMRADES, IRIS | **CPLcofold** (default), COMRADES |
+| Sequence only | ViennaRNA MFE | RNAcofold |
+
+A guided fold reads regions of the reference; a sequence-only fold can also read a HYB record's sequence or a pasted one. Each **Folding workflow** preset sets the three steps for one kind of interaction, with CPLfold or CPLcofold; you can then choose COMRADES on the same regions.
 
 ### CPLfold and CPLcofold
-CPLfold folds one region with a beam search derived from LinearFold, in which the base pairs that the chimeras support get a bonus, and a second phase can add pseudoknots. CPLcofold folds two strands the same way. Both are the Python package `cplfold` in `third_party/cplfold` (`import cplfold; cplfold.fold(sequence)`, or `pip install third_party/cplfold`) and the local CLIs `bin/cplfold` and `bin/cplcofold`. The core predictor needs NumPy and Numba, not a native HotKnots executable. In the web app, choose the **CPLfold** engine, which folds two regions with CPLcofold; in the desktop app, choose **CPLfold** or **CPLcofold**.
+CPLfold folds one region with a beam search derived from LinearFold, in which the base pairs that the chimeras support get a bonus, and a second phase can add pseudoknots. CPLcofold folds two strands the same way. Both are the Python package `cplfold` in `third_party/cplfold` (`import cplfold; cplfold.fold(sequence)`, or `pip install third_party/cplfold`) and the local CLIs `bin/cplfold` and `bin/cplcofold`. The core predictor needs NumPy and Numba, not a native HotKnots executable.
 
-The web app runs CPLfold in your browser without Numba, which limits the sequence length: at most 500 nt, and often less after a speed test in your browser. For a longer sequence, click **Download local inputs** on the structure page, which saves the prepared sequence and, for HYB-guided runs, the bonus matrix that the browser uses. Then run the command shown there, for example:
+The web app runs CPLfold in your browser without Numba, which limits the sequence length: at most 500 nt, and often less after a speed test in your browser. For a longer sequence, click **Download local inputs** on the structure page, which saves the prepared sequence and the bonus matrix that the browser uses. Then run the command shown there, for example:
 ```bash
 bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv
 ```
@@ -151,7 +161,7 @@ The command shown keeps your settings. `bin/cplfold` refuses sequences over 1,00
 **Binding energies.** The dG column that `hyb2pipe -e 1` writes comes from ViennaRNA's RNAduplex, or from RNAcofold with `--energy-engine rnacofold` (the original `hyb2` values). The apps can recalculate it for each `.hyb` row with CPLcofold, with or without pseudoknots (an experimental score) and for arms of up to 500 nt in all, or with RNAduplex or RNAcofold: **HYB binding energies** in the web app, **Explore › Binding energies** in the desktop app.
 
 ### COMRADES and IRIS
-**COMRADES.** Here COMRADES is a folding method, not the experiment of the same name. RNAcofold folds the two arms of each chimera together, and the pairs it forms between the arms are the evidence. The 1,001 strongest pairs are merged into stems, and up to 75 stems are added one by one as hard constraints to ViennaRNA MFE folds, in rank order and, if you ask for them, in up to 1,000 seeded random orders; the structure whose pairs have the most evidence wins. This is the method of the original `hyb2_fold`, which ran `comradesMakeConstraints_2` and `comradesFold2` and joined two regions with the same 100-nt spacer ([`5398ef3`](https://github.com/Vicky-0256/hyb2/tree/5398ef3/bin)). In the web app, choose the **ViennaRNA** engine and the **COMRADES(ViennaRNA)** folding mode; in the desktop app, choose the **COMRADES** engine, which can also fit the constraints with an mfold 3.6 that you install. `bin/comrades` runs the desktop app's COMRADES on the command line. With Python 3.11 and the ViennaRNA Python bindings installed (`python -m pip install ViennaRNA==2.7.2` in an active virtual environment), run:
+**COMRADES.** Here COMRADES is a folding method, not the experiment of the same name. RNAcofold folds the two arms of each chimera together, and the pairs it forms between the arms are the evidence. The 1,001 strongest pairs are merged into stems, and up to 75 stems are added one by one as hard constraints to ViennaRNA MFE folds, in rank order and, if you ask for them, in up to 1,000 seeded random orders; the structure whose pairs have the most evidence wins. This is the method of the original `hyb2_fold`, which ran `comradesMakeConstraints_2` and `comradesFold2` and joined two regions with the same 100-nt spacer ([`5398ef3`](https://github.com/Vicky-0256/hyb2/tree/5398ef3/bin)). In both apps, choose **COMRADES** as the algorithm of a guided fold, of one region or two; the desktop app can also fit the constraints with an mfold 3.6 that you install. `bin/comrades` runs the desktop app's COMRADES on the command line. With Python 3.11 and the ViennaRNA Python bindings installed (`python -m pip install ViennaRNA==2.7.2` in an active virtual environment), run:
 ```sh
 bin/comrades --reference data/U2.fasta --hyb data/U2-U2.hyb.gz -o u2.json
 ```

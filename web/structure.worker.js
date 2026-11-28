@@ -42,6 +42,10 @@ self.onmessage = async function (event) {
       await runComradesFold(message);
       return;
     }
+    if (message.type === "cofold") {
+      await runCofold(message);
+      return;
+    }
     if (message.type !== "fold") {
       return;
     }
@@ -119,6 +123,69 @@ async function initialiseEngine() {
   });
 
   return module;
+}
+
+// Sequence only, two regions: strands A and B folded together as
+// `RNAcofold --noconv --noPS` does (the dimer MFE, with pairs within and
+// between the strands). The result has CPLcofold's two-strand form: the
+// compact A+B sequence and dot-bracket, the cutpoint after strand A, the
+// "&" forms and each pair's strand positions.
+async function runCofold(message) {
+  const strands = [message.sequenceA, message.sequenceB].map(function (input, index) {
+    const sequence = globalThis.Hyb2FoldText.readSequence(input, index ? "RNA B" : "RNA A");
+    if (!sequence) {
+      throw new Error("RNAcofold needs two non-empty RNA strands (RNA A and RNA B).");
+    }
+    return sequence;
+  });
+  const [sequenceA, sequenceB] = strands;
+  const sequence = sequenceA + sequenceB;
+  if (sequence.length > MAX_SEQUENCE_LENGTH) {
+    throw new Error("ViennaRNA WebAssembly supports up to " + MAX_SEQUENCE_LENGTH + " nt in both strands together in HYB2 Web Lite.");
+  }
+  const { temperature, minimumLoop } = readViennaParameters(message, globalThis.Hyb2EngineParameters.vienna);
+  postProgress("Loading ViennaRNA RNAcofold engine", 7);
+  const engine = await getEngine();
+  postProgress("Calculating the two-strand minimum-free-energy structure", 45);
+  /* Yield once so the progress state can paint before the synchronous C call. */
+  await yieldToEventLoop();
+
+  const startedAt = Date.now();
+  const folded = cofoldWithVienna(engine, sequenceA, sequenceB, temperature, minimumLoop);
+  const cutpoint = sequenceA.length;
+  const strandPosition = function (position) {
+    return position <= cutpoint ? ["A", position] : ["B", position - cutpoint];
+  };
+  const pairs = folded.pairs.map(function (pair) {
+    const [leftStrand, leftStrandPosition] = strandPosition(pair.left);
+    const [rightStrand, rightStrandPosition] = strandPosition(pair.right);
+    return Object.assign(pair, { leftStrand, leftStrandPosition, rightStrand, rightStrandPosition,
+      intermolecular: pair.left <= cutpoint && pair.right > cutpoint });
+  });
+  const version = engine.UTF8ToString(engine._hyb2_vienna_version());
+  self.postMessage({ type: "complete", result: {
+    algorithm: "RNAcofold",
+    model: "Turner 2004 nearest-neighbour energy parameters; minimum-free-energy structure of the two-strand dimer, as RNAcofold --noconv --noPS; non-pseudoknotted",
+    engine: "ViennaRNA",
+    engineVersion: version || "2.7.2",
+    temperature: temperature,
+    minimumLoop: minimumLoop,
+    energy: folded.energy,
+    energyUnit: "kcal/mol",
+    sequence: sequence,
+    displaySequence: sequenceA + "&" + sequenceB,
+    cutpoint: cutpoint,
+    strandLengths: [sequenceA.length, sequenceB.length],
+    dotBracket: folded.dotBracket,
+    dotBracketWithBreak: folded.dotBracket.slice(0, cutpoint) + "&" + folded.dotBracket.slice(cutpoint),
+    pairs: pairs,
+    intermolecularPairs: pairs.filter(function (pair) { return pair.intermolecular; }).length,
+    unpaired: sequence.length - pairs.length * 2,
+    constraintMode: "none",
+    constraintCount: 0,
+    constraints: [],
+    elapsedMs: Date.now() - startedAt
+  } });
 }
 
 async function runComradesFold(message) {

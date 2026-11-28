@@ -27,6 +27,9 @@ const {Hyb2Pages: pages, Hyb2Structure: controller, Hyb2StructureUI: ui, Hyb2UI:
 const plain = value => JSON.parse(JSON.stringify(value));
 const api = {toasts: [], downloads: [], copies: [], navigations: [], navigate(page) { this.navigations.push(page); }, render() {}, showToast(message) { this.toasts.push(message); },
   download(name, contents) { this.downloads.push({name, contents}); }, copyText(text) { this.copies.push(text); }};
+// Two pasted strands with no HYB evidence. The form predates the three setup
+// steps (sequence-only CPLcofold, which is no longer offered): it opens and
+// folds as Sequence only, Two regions, RNAcofold.
 function state(overrides = {}) {
   return {summary: {rnaNames: []}, records: [], structure: {
     engine: "cplfold", cplfoldMode: "cofold", source: "paste", pastedSequence: "GGG", cplfoldSequenceTwo: "CCC",
@@ -35,6 +38,33 @@ function state(overrides = {}) {
     status: "idle", result: null, viewMode: "folded", ...overrides
   }};
 }
+// CPLfold and CPLcofold are always guided by the HYB chimeras. CPLcofold
+// folds reference regions A:1-a (G…) and B:1-b (C…), with HYB rows joining
+// A:1 to B:1 and A:1 to A:a; CPLfold (cplfoldMode "single") folds A:1-a.
+function cplState({a = 3, b = 3, ...overrides} = {}) {
+  const target = state({source: "reference", rna: "A", start: 1, end: a, secondRna: "B", secondStart: 1, secondEnd: b,
+    cplfoldEvidence: "hyb-blocks", ...overrides});
+  target.summary.rnaNames = ["A", "B"];
+  target.reference = {mapping: {A: "A", B: "B"}};
+  target.view = {structureEvidence: {guided: true, rnas: ["A", "B"], records: [
+    {id: "cross", index: 0, rnaOne: "A", rnaOneStart: 1, rnaOneEnd: 1, rnaTwo: "B", rnaTwoStart: 1, rnaTwoEnd: 1},
+    {id: "intra", index: 1, rnaOne: "A", rnaOneStart: 1, rnaOneEnd: 1, rnaTwo: "A", rnaTwoStart: a, rnaTwoEnd: a}],
+  fasta: {mapping: {A: "A", B: "B"}, sequences: [{id: "A", sequence: "G".repeat(1200)}, {id: "B", sequence: "C".repeat(1200)}]}}};
+  return target;
+}
+// Download local inputs of a guided fold: the FASTA and the bonus matrix,
+// once the worker has prepared the matrix. Returns the downloaded files.
+function localInputs(target) {
+  const downloads = api.downloads.length;
+  assert.equal(ui.handleAction("download-local-cplfold-input", target, api), true);
+  assert.equal(api.downloads.length, downloads, "both files wait for the current matrix");
+  const {type, sequence, cutpoint} = target.structureWorker.message;
+  assert.equal(type, "cplfold-bonus-matrix");
+  target.structureWorker.onmessage({data: {type: "bonus-matrix-complete", result: {sequence, cutpoint,
+    evidence: {source: "hyb-block-intervals", bonusEntries: [{one: 1, two: sequence.length, value: 1}]}}}});
+  return api.downloads.slice(downloads);
+}
+const steps = target => plain(context.window.Hyb2Data.structureSteps(target.structure));
 let current = state({pastedSequence: " ggt ", cplfoldSequenceTwo: " aCC "});
 const numbered = state({pastedSequence: "\ufeff>label & 1\r1 GGGGAAAACCCC&ggttttcccc", cplfoldSequenceTwo: ""});
 const numberedInfo = pages.getStructureSequence(numbered);
@@ -54,10 +84,19 @@ assert.deepEqual(plain(context.window.Hyb2Data.normaliseFoldSequence("1 ggt", fa
 }
 let info = pages.getStructureSequence(current);
 assert.deepEqual(plain([info.sequence, info.displaySequence, info.cutpoint, info.strandLengths, info.error]), ["GGUACC", "GGU&ACC", 3, [3, 3], ""]);
-assert.match(pages.renderStructure(current), /Two local regions · CPLcofold/);
-assert.match(pages.renderStructure(current), /data-key="cplfoldSequenceTwo"/);
-assert.match(pages.renderStructure(current), /Predict CPLcofold candidates/);
-assert.doesNotMatch(pages.renderStructure(current), /value="CC09"|value="RE"/);
+{
+  const html = pages.renderStructure(current);
+  assert.deepEqual(steps(current), {evidence: "sequence", regions: "two", algorithm: "rnacofold"});
+  assert.match(html, /data-key="stepAlgorithm"><option value="rnacofold" selected>RNAcofold<\/option><\/select>/);
+  assert.match(html, /data-key="cplfoldSequenceTwo"/);
+  assert.match(html, /Predict RNAcofold structure/);
+  assert.match(html, /RNAcofold · Pasted RNA A \+ RNA B · 6 nt · sequence only/, "Setup summary");
+  assert.doesNotMatch(html, /data-key="cplfoldEvidence"|data-key="cplfoldEnergyModel"/, "no sequence-only CPLcofold");
+  const guided = pages.renderStructure(cplState());
+  assert.match(guided, /data-key="stepAlgorithm"><option value="cplcofold" selected>CPLcofold · Hyb2<\/option><option value="comrades">COMRADES · for comparison<\/option><\/select>/);
+  assert.match(guided, /Predict CPLcofold candidates/);
+  assert.doesNotMatch(guided, /value="CC09"|value="RE"/);
+}
 for (const [a, b] of [["G&", ""], ["&C", ""], ["G&C&A", ""], ["G&C", "A"], ["", "C"], ["G", ""], ["GN", "C"], ["G", "C&"]]) {
   const invalid = state({pastedSequence: a, cplfoldSequenceTwo: b});
   assert.ok(pages.getStructureSequence(invalid).error, `${a}/${b} must fail`);
@@ -71,7 +110,8 @@ for (const length of [1, 4]) {
   const target = state({pastedSequence: ">A\r1 " + "g".repeat(length), cplfoldSequenceTwo: "c\u0085".repeat(length)});
   assert.equal(pages.getStructureSequence(target).displaySequence, "G".repeat(length) + "&" + "C".repeat(length));
   assert.equal(controller.predict(target, api), true);
-  assert.equal(workers.at(-1).message.cutpoint, length);
+  assert.deepEqual(plain([workers.at(-1).message.type, workers.at(-1).message.sequenceA, workers.at(-1).message.sequenceB]),
+    ["cofold", "G".repeat(length), "C".repeat(length)]);
   controller.cancel(target);
 }
 {
@@ -92,12 +132,20 @@ for (const length of [1, 4]) {
     controller.cancel(target);
   } finally { Object.assign(rules, original); }
 }
-const changed = state({cplfoldMode: "single", cplfoldEnergyModel: "CC09"});
-controls.handleChange(changed, {dataset: {feature: "structure-control", key: "cplfoldMode"}, value: "cofold", type: "select-one"}, api);
+// Two regions for CPLfold is CPLcofold: a model CPLcofold lacks becomes its default.
+const changed = cplState({cplfoldMode: "single", a: 10, cplfoldEnergyModel: "CC09", workflow: "short-intramolecular"});
+controls.handleChange(changed, {dataset: {feature: "structure-control", key: "stepRegions"}, value: "two", type: "select-one"}, api);
+assert.deepEqual(steps(changed), {evidence: "guided", regions: "two", algorithm: "cplcofold"});
 assert.equal(changed.structure.cplfoldEnergyModel, "DP09"); assert.equal(changed.structure.workflow, "custom");
+// RNAcofold sends the two strands to the ViennaRNA worker; CPLcofold sends
+// the same strands, cut from the reference, with their HYB rows.
 current = state(); assert.equal(controller.predict(current, api), true);
+assert.match(workers.at(-1).url, /structure\.worker\.js/);
+assert.deepEqual(plain(workers.at(-1).message), {type: "cofold", sequenceA: "GGG", sequenceB: "CCC", minimumLoop: 3, temperature: 37});
+controller.cancel(current);
+current = cplState(); assert.equal(controller.predict(current, api), true);
 assert.match(workers.at(-1).url, /cplfold\.worker\.mjs/);
-assert.deepEqual(plain([workers.at(-1).message.sequence, workers.at(-1).message.cutpoint]), ["GGGCCC", 3]);
+assert.deepEqual(plain([workers.at(-1).message.sequence, workers.at(-1).message.cutpoint, workers.at(-1).message.evidenceMode, workers.at(-1).message.evidenceArms.length]), ["GGGCCC", 3, "hyb-blocks", 2]);
 assert.equal(workers.at(-1).message.allowPseudoknot, false); controller.cancel(current);
 function assertRejectsLocalOptions(target, issue) {
   const count = workers.length, requests = workerRequests;
@@ -124,19 +172,17 @@ function assertRejectsModel(target) {
   assert.equal(workers.length, workerCount);
   assert.equal(target.structure.runId, runId, "no prediction, probe or matrix request, even on a reused worker");
 }
-assertRejectsModel(state({cplfoldEnergyModel: "CC09"}));
-assertRejectsModel(state({cplfoldMode: "single", cplfoldEnergyModel: "retired", pastedSequence: "GGGCCC"}));
+assertRejectsModel(cplState({cplfoldEnergyModel: "CC09"}));
+assertRejectsModel(cplState({cplfoldMode: "single", a: 10, cplfoldEnergyModel: "retired"}));
 for (const [mode, input] of [["cofold", "dp03"], ["cofold", "dP09"], ["single", "cc09"]]) {
-  const target = state({cplfoldMode: mode, cplfoldEnergyModel: input, pastedSequence: "GGGCCC"});
+  const target = cplState({cplfoldMode: mode, a: 10, cplfoldEnergyModel: input});
   assert.equal(controller.predict(target, api), true);
   assert.equal(target.structureWorker.message.energyModel, input.toUpperCase());
   controller.cancel(target);
-  const downloads = api.downloads.length;
-  ui.handleAction("download-local-cplfold-input", target, api);
-  assert.deepEqual(api.downloads.slice(downloads).map(file => file.name), ["cplfold-input.fasta"]);
+  assert.deepEqual(localInputs(target).map(file => file.name), ["cplfold-input.fasta", "cplfold-bonus-matrix.tsv"]);
   assert.ok(api.toasts.at(-1).includes("--model " + input.toUpperCase() + " "));
 }
-const badTopology = state({cplfoldAllowPseudoknot: "false"});
+const badTopology = cplState({cplfoldAllowPseudoknot: "false"});
 const workerCount = workers.length, downloadCount = api.downloads.length;
 assert.doesNotMatch(pages.renderStructure(badTopology), /data-key="cplfoldAllowPseudoknot" checked/);
 assert.equal(controller.predict(badTopology, api), false);
@@ -153,11 +199,11 @@ assert.equal(api.downloads.length, downloadCount);
   catalog.cplcofold = {...original, models: [{value: "DP03", label: "DP03"}, {value: "NEW", label: "New cofold model"}], defaultModel: "NEW",
     ranges: {...original.ranges, energyDelta: [0, 8], beamSize: [1, 10]}, defaults: {...original.defaults, beamSize: 7, allowPseudoknot: true}};
   try {
-    const target = state({cplfoldMode: "single"});
-    const retained = state({cplfoldMode: "single", cplfoldEnergyModel: "DP03"});
-    controls.handleChange(retained, {dataset: {feature: "structure-control", key: "cplfoldMode"}, value: "cofold", type: "select-one"}, api);
+    const target = cplState({cplfoldMode: "single", a: 10});
+    const retained = cplState({cplfoldMode: "single", a: 10, cplfoldEnergyModel: "DP03"});
+    controls.handleChange(retained, {dataset: {feature: "structure-control", key: "stepRegions"}, value: "two", type: "select-one"}, api);
     assert.equal(retained.structure.cplfoldEnergyModel, "DP03");
-    controls.handleChange(target, {dataset: {feature: "structure-control", key: "cplfoldMode"}, value: "cofold", type: "select-one"}, api);
+    controls.handleChange(target, {dataset: {feature: "structure-control", key: "stepRegions"}, value: "two", type: "select-one"}, api);
     assert.equal(target.structure.cplfoldEnergyModel, "NEW");
     delete target.structure.cplfoldBeam;
     delete target.structure.cplfoldAllowPseudoknot;
@@ -178,7 +224,7 @@ assert.equal(api.downloads.length, downloadCount);
     target.structure.cplfoldEnergyDelta = "9";
     assert.equal(controller.predict(target, api), false);
     assert.match(api.toasts.at(-1), /from 0 to 8/);
-    const stale = state({cplfoldBeam: "7"}); // DP09 was removed; all other parameters are valid.
+    const stale = cplState({cplfoldBeam: "7"}); // DP09 was removed; all other parameters are valid.
     const html = pages.renderStructure(stale);
     assert.match(html, /selected disabled>Choose a supported model/);
     assert.doesNotMatch(html, /bin\/cplcofold --sequence-file/);
@@ -188,19 +234,19 @@ assert.equal(api.downloads.length, downloadCount);
 // A desktop runtime declaring only single-chain support must use browser limits and routing.
 let nativeCalls = 0;
 context.window.Hyb2Desktop = {enabled: true, capabilities: {cplfoldNative: true}, limits: {cplfoldMaxLength: 2000}, predictCplfold() { nativeCalls++; return Promise.resolve({}); }};
-const long = state({pastedSequence: "G".repeat(40), cplfoldSequenceTwo: "C".repeat(40)});
+const long = cplState({a: 40, b: 40});
 assert.equal(controller.predict(long, api), false); assert.match(api.toasts.at(-1), /80 nt.*75 nt browser baseline/);
-assert.match(pages.renderStructure(long), /CPLcofold \+ Pyodide · Browser/);
+assert.match(pages.renderStructure(long), /CPLcofold · Hyb2 · Browser \(Pyodide\)/);
 assert.doesNotMatch(pages.renderStructure(long), /Using the desktop bundled/);
-assert.equal(controller.predict(state(), api), true); assert.equal(nativeCalls, 0);
-const probe = state(); assert.equal(controller.probeCplfoldCapacity(probe, api), true);
+assert.equal(controller.predict(cplState(), api), true); assert.equal(nativeCalls, 0);
+const probe = cplState(); assert.equal(controller.probeCplfoldCapacity(probe, api), true);
 assert.equal(workers.at(-1).message.cofold, true);
 const doubleProfile = probe.structure.cplfoldCapacity.profileKey; controller.cancel(probe);
 delete context.window.Hyb2Desktop;
-const singleProbe = state({cplfoldMode: "single"}); assert.equal(controller.probeCplfoldCapacity(singleProbe, api), true);
+const singleProbe = cplState({cplfoldMode: "single", a: 10}); assert.equal(controller.probeCplfoldCapacity(singleProbe, api), true);
 assert.equal(workers.at(-1).message.cofold, false);
 assert.notEqual(singleProbe.structure.cplfoldCapacity.profileKey, doubleProfile); controller.cancel(singleProbe);
-const stale = state({pastedSequence: "G".repeat(40), cplfoldSequenceTwo: "C".repeat(40),
+const stale = cplState({a: 40, b: 40,
   cplfoldCapacity: {status: "ready", baselineLength: 75, hardCeiling: 500, recommendedLength: 200, profileKey: singleProbe.structure.cplfoldCapacity.profileKey}});
 assert.equal(controller.predict(stale, api), false); assert.match(api.toasts.at(-1), /settings changed/i);
 // Real reference coordinates map to compact A+B, retaining inter- and intra-strand reads.
@@ -230,10 +276,10 @@ for (const fields of [{start: "7", end: "2"}, {secondStart: "8", secondEnd: "3"}
 // decimal. Cover sequence-only and guided single windows as well as both sides.
 {
   const modes = [
-    {engine: "cplfold", cplfoldMode: "single", cplfoldEvidence: "none"},
     {engine: "cplfold", cplfoldMode: "single", cplfoldEvidence: "hyb-blocks"},
     {engine: "viennarna", constraintMode: "none"},
-    {engine: "cplfold", cplfoldMode: "cofold", cplfoldEvidence: "none"},
+    {engine: "viennarna", constraintMode: "none", cplfoldMode: "cofold", evidenceLayout: "paired"},
+    {engine: "cplfold", cplfoldMode: "cofold", cplfoldEvidence: "hyb-blocks"},
     {engine: "viennarna", constraintMode: "hyb-guided", evidenceLayout: "paired"}
   ];
   // Blank fields can omit a single-window bound; explicit null stays invalid.
@@ -382,16 +428,14 @@ for (const view of [{structureEvidence: null}, {...ref.view, loading: {structure
   assert.match(api.toasts.at(-1), /load/i);
   assert.equal(target.structure.result, cachedMatrix);
 }
-// A prediction is not a substitute for a missing input-preparation module, even for FASTA only.
+// A prediction is not a substitute for a missing input-preparation module.
 delete context.window.Hyb2Pages;
 try {
-  for (const evidence of ["none", "hyb-blocks"]) {
-    const target = state({result: cachedMatrix, cplfoldEvidence: evidence});
-    const before = [workerRequests, api.downloads.length];
-    ui.handleAction("download-local-cplfold-input", target, api);
-    assert.deepEqual([workerRequests, api.downloads.length], before);
-    assert.match(api.toasts.at(-1), /valid sequence/);
-  }
+  const target = cplState({result: cachedMatrix});
+  const before = [workerRequests, api.downloads.length];
+  ui.handleAction("download-local-cplfold-input", target, api);
+  assert.deepEqual([workerRequests, api.downloads.length], before);
+  assert.match(api.toasts.at(-1), /valid sequence/);
 } finally { context.window.Hyb2Pages = pages; }
 // A saved guided form without any evidence must not silently export just the sequence.
 const missingEvidence = state({cplfoldMode: "single", cplfoldEvidence: "hyb-blocks", pastedSequence: "GGGCCC"});
@@ -412,21 +456,21 @@ assert.equal(editable.structureWorker.message.supportKernel, "block");
 editable.structureWorker.onmessage({data: {type: "error", message: "Synthetic matrix failure"}});
 assert.equal(api.downloads.length, pendingDownloads);
 
-const paste = state({cplfoldEnergyDelta: "-1", cplfoldKernel: "rnacofold"});
-assertRejectsLocalOptions(paste, /--delta.*nonnegative/);
-assert.match(pages.renderStructure(paste), /Energy window \(--delta\) must be ≥ 0/);
-assert.doesNotMatch(pages.renderStructure(paste), /bin\/cplcofold --sequence-file/);
-change(paste, "cplfoldEnergyDelta", "0");
-assert.match(pages.renderStructure(paste), /bin\/cplcofold .*--delta 0/);
-ui.handleAction("download-local-cplfold-input", paste, api);
-assert.match(api.toasts.at(-1), /bin\/cplcofold .*--delta 0/); // no kernel needed in sequence-only mode
+const delta = cplState({cplfoldEnergyDelta: "-1"});
+assertRejectsLocalOptions(delta, /--delta.*nonnegative/);
+assert.match(pages.renderStructure(delta), /Energy window \(--delta\) must be ≥ 0/);
+assert.doesNotMatch(pages.renderStructure(delta), /bin\/cplcofold --sequence-file/);
+change(delta, "cplfoldEnergyDelta", "0");
+assert.match(pages.renderStructure(delta), /bin\/cplcofold .*--delta 0/);
+localInputs(delta);
+assert.match(api.toasts.at(-1), /bin\/cplcofold .*--delta 0/);
 // bin/cplfold refuses more than 1,000 nt unless HYB2_CPLFOLD_MAX_NT raises its guard: the
 // About and downloaded commands raise it to the FASTA's length, both strands.
 for (const [a, b, prefix] of [[600, 400, ""], [600, 401, "HYB2_CPLFOLD_MAX_NT=1001 "]]) {
-  const long = state({pastedSequence: "G".repeat(a), cplfoldSequenceTwo: "C".repeat(b)});
+  const long = cplState({a, b});
   assert.ok(pages.renderStructure(long).includes("Run <code>" + prefix + "bin/cplcofold --sequence-file "), `${a} + ${b} nt About`);
-  ui.handleAction("download-local-cplfold-input", long, api);
-  assert.ok(api.toasts.at(-1).startsWith("CPLfold FASTA downloaded. Run: " + prefix + "bin/cplcofold --sequence-file "), api.toasts.at(-1));
+  localInputs(long);
+  assert.ok(api.toasts.at(-1).startsWith("CPLfold local inputs downloaded. Run: " + prefix + "bin/cplcofold --sequence-file "), api.toasts.at(-1));
 }
 
 // The legacy single-strand CLI accepts signed, finite alpha/beta; cofold does not.
@@ -451,7 +495,7 @@ const result = {...candidate, sequence: "GGGCCC", displaySequence: "GGG&CCC", en
   selectedCandidate: 0, candidates: [candidate, {...candidate, dotBracket: "......", dotBracketWithBreak: "...&...", pairs: [], unpaired: 6,
     energyMetadata: {energy_kind: "heuristic", energy_model: "experimental-test-model"}, intermolecularPairs: 0}],
   parameters: {allowPseudoknot: false, energyModel: "DP09"}, allowPseudoknot: false, evidence: {source: "none", bonusEntries: []}};
-current = state(); controller.predict(current, api); workers.at(-1).onmessage({data: {type: "complete", result}});
+current = cplState(); controller.predict(current, api); current.structureWorker.onmessage({data: {type: "complete", result}});
 assert.equal(current.structure.result.engine, "CPLcofold"); assert.match(current.structure.message, /CPLcofold completed/);
 assert.equal(current.structure.result.cutpoint, 3); assert.equal(current.structure.result.sequence.length, 6);
 assert.equal(ui.handleAction("select-cplfold-candidate", current, api, {dataset: {candidateIndex: "1"}}), true);
@@ -478,8 +522,7 @@ ui.handleAction("download-structure-dot-bracket", current, api); assert.match(ap
 ui.handleAction("download-structure-ct", current, api);
 const ct = api.downloads.at(-1).contents.trim().split("\n").slice(1).map(line => line.split("\t"));
 assert.deepEqual(ct[2].slice(2, 4), ["2", "0"]); assert.deepEqual(ct[3].slice(2, 4), ["0", "5"]);
-ui.handleAction("download-local-cplfold-input", current, api);
-assert.equal(api.downloads.at(-1).contents, ">HYB2_Web_RNA_A\nGGG\n>HYB2_Web_RNA_B\nCCC\n");
+assert.equal(localInputs(current)[0].contents, ">HYB2_Web_RNA_A\nGGG\n>HYB2_Web_RNA_B\nCCC\n");
 assert.match(ui.localCplfoldCommand(current.structure, false), /^bin\/cplcofold .*--mode standard/);
 assert.match(ui.localCplfoldCommand({...current.structure, cplfoldAllowPseudoknot: true}, false), /--mode pseudoknot/);
 assert.match(pages.renderStructureExportMenu(current.structure.result), /download-cplfold-candidates/);
@@ -488,21 +531,52 @@ const backbones = diagram.children.filter(node => node.attributes["data-strand"]
 assert.equal(backbones.length, 2);
 assert.ok(Number(backbones[0].attributes.x2) < Number(backbones[1].attributes.x1), "backbone must have a visible gap at the nick");
 assert.equal(diagram.children.find(node => node.attributes["data-chain-break"]).attributes["data-chain-break"], "3");
-// A stale single-chain worker response must not become a seemingly valid cofold result.
-const wrongRuntime = state();
-controller.predict(wrongRuntime, api);
-workers.at(-1).onmessage({data: {type: "complete", result: {...result, engine: "CPLfold", cutpoint: undefined}}});
-assert.equal(wrongRuntime.structure.status, "error");
-assert.equal(wrongRuntime.structure.result, null);
-assert.match(api.toasts.at(-1), /did not preserve the two RNA strands/);
-const overCeiling = state({pastedSequence: "G".repeat(251), cplfoldSequenceTwo: "C".repeat(250)});
+// RNAcofold's result is a two-strand result too: the same rendering, exports and report.
+{
+  const cofoldPairs = pairs.map(({layer, ...pair}) => ({...pair, leftStrand: "A", leftStrandPosition: pair.left,
+    rightStrand: "B", rightStrandPosition: pair.right - 3, intermolecular: true}));
+  const folded = {algorithm: "RNAcofold", model: "RNAcofold --noconv --noPS", engine: "ViennaRNA", engineVersion: "2.7.2",
+    temperature: 37, minimumLoop: 3, energy: -2.5, energyUnit: "kcal/mol", sequence: "GGGCCC", displaySequence: "GGG&CCC",
+    cutpoint: 3, strandLengths: [3, 3], dotBracket: "((()))", dotBracketWithBreak: "(((&)))", pairs: cofoldPairs,
+    intermolecularPairs: 3, unpaired: 0, constraintMode: "none", constraintCount: 0, constraints: [], elapsedMs: 1};
+  const target = state();
+  assert.equal(controller.predict(target, api), true);
+  target.structureWorker.onmessage({data: {type: "complete", result: folded}});
+  assert.equal(target.structure.status, "complete", target.structure.message);
+  assert.equal(target.structure.message, "RNAcofold folded the two strands locally.");
+  const saved = target.structure.result;
+  assert.deepEqual(plain([saved.engine, saved.algorithm, saved.cutpoint, saved.sequence, saved.source]), ["ViennaRNA", "RNAcofold", 3, "GGGCCC", "paste"]);
+  assert.match(pages.renderStructureResult(saved, null, "folded", true), /<strong>RNAcofold · two RNA molecules<\/strong> · A 3 nt \+ B 3 nt/);
+  ui.handleAction("copy-structure-dot-bracket", target, api); assert.equal(api.copies.at(-1), "(((&)))");
+  ui.handleAction("download-structure-dot-bracket", target, api); assert.match(api.downloads.at(-1).contents, /GGG&CCC\n\(\(\(&\)\)\)/);
+  ui.handleAction("download-structure-ct", target, api);
+  const rows = api.downloads.at(-1).contents.trim().split("\n").slice(1).map(line => line.split("\t"));
+  assert.deepEqual(rows[2].slice(2, 4), ["2", "0"]); assert.deepEqual(rows[3].slice(2, 4), ["0", "5"]);
+  const cofoldReport = ui.structureReport(target, saved);
+  assert.deepEqual(plain([cofoldReport.source.cutpoint, cofoldReport.source.displaySequence, cofoldReport.prediction.algorithm,
+    cofoldReport.prediction.dotBracketWithBreak, cofoldReport.prediction.mfe]), [3, "GGG&CCC", "RNAcofold", "(((&)))", -2.5]);
+  assert.match(cofoldReport.methodScope.note, /RNAcofold/);
+  assert.match(ui.basePairTsv(saved), /cutpoint\tleft_strand\tleft_strand_position/);
+  assert.match(pages.renderStructure(target), /class="structure-setup-line">RNAcofold · Pasted RNA A \+ RNA B · 6 nt · sequence only/);
+  assert.equal(ui.buildStructureDiagram(saved, null, "folded").children.filter(node => node.attributes["data-strand"]).length, 2);
+}
+// A stale single-chain worker response must not become a seemingly valid
+// cofold result, nor one engine's two strands the other's.
+for (const [wrongRuntime, reply] of [[cplState(), {...result, engine: "CPLfold", cutpoint: undefined}],
+  [state(), {...result, engine: "CPLfold", cutpoint: undefined}], [state(), result]]) {
+  assert.equal(controller.predict(wrongRuntime, api), true);
+  wrongRuntime.structureWorker.onmessage({data: {type: "complete", result: reply}});
+  assert.equal(wrongRuntime.structure.status, "error");
+  assert.equal(wrongRuntime.structure.result, null);
+  assert.match(api.toasts.at(-1), /did not preserve the two RNA strands/);
+}
+const overCeiling = cplState({a: 251, b: 250});
 assert.equal(controller.predict(overCeiling, api), false);
 assert.match(api.toasts.at(-1), /hard safety ceiling of 500/);
 // The local CLI can use larger inputs and search budgets than the browser.
 const localBeam = context.Hyb2EngineParameters.cplcofold.ranges.beamSize[1] + 1;
 Object.assign(overCeiling.structure, {cplfoldBeam: String(localBeam), cplfoldEnergyDelta: "51", cplfoldMaxPhase1: "21", cplfoldBeta: "1.5"});
-ui.handleAction("download-local-cplfold-input", overCeiling, api);
-assert.equal(api.downloads.at(-1).contents, ">HYB2_Web_RNA_A\n" + "G".repeat(251) + "\n>HYB2_Web_RNA_B\n" + "C".repeat(250) + "\n");
+assert.equal(localInputs(overCeiling)[0].contents, ">HYB2_Web_RNA_A\n" + "G".repeat(251) + "\n>HYB2_Web_RNA_B\n" + "C".repeat(250) + "\n");
 assert.ok(api.toasts.at(-1).includes("--beam " + localBeam + " --delta 51 --max-phase1 21 "));
 assert.match(api.toasts.at(-1), /--beta 1.5\b/);
 const sequenceReference = state({...ref.structure, cplfoldEvidence: "none", status: "idle"});
@@ -517,27 +591,34 @@ assert.match(pages.cplfoldLocalCommand(current.structure, false), /^bin\/cplcofo
 context.window.Hyb2StructureUI = savedUi;
 
 
-// Workflow controls must never change the selected CPLfold evidence/ranking options.
+// Each preset sets the three steps, guided by the HYB chimeras: CPLfold for
+// one region, CPLcofold for two, from any setup. It never changes the
+// selected CPLfold ranking options.
 function change(target, key, value, handler = "handleChange") {
   const element = {dataset: {feature: "structure-control", key}, value, type: "select-one"};
   assert.equal(controls[handler](target, element, api), true);
 }
 function rankingOptions(target) {
   const s = target.structure;
-  return [s.cplfoldAlpha, s.cplfoldBeta, s.cplfoldAllowPseudoknot, s.cplfoldEvidence];
+  return [s.cplfoldAlpha, s.cplfoldBeta, s.cplfoldAllowPseudoknot];
 }
+const regionFields = target => ["rna", "start", "end", "secondRna", "secondStart", "secondEnd"].map(key => target.structure[key]);
 for (const handler of ["handleChange", "handleInput"]) {
-  for (const evidence of ["none", "hyb-blocks"]) {
+  // guided CPLfold; a form saved as sequence-only CPLfold (ViennaRNA MFE); COMRADES; ViennaRNA MFE from a pasted sequence
+  for (const from of [{cplfoldEvidence: "hyb-blocks"}, {cplfoldEvidence: "none"}, {engine: "viennarna", constraintMode: "hyb-guided"},
+    {engine: "viennarna", constraintMode: "none", source: "paste"}]) {
     for (const workflow of ["long-intramolecular", "intermolecular", "homodimer", "short-intramolecular"]) {
+      const one = workflow === "short-intramolecular";
       const target = state({source: "reference", cplfoldMode: "single", rna: "A", start: "3", end: "8",
         secondRna: "B", secondStart: "13", secondEnd: "18", cplfoldAlpha: "0.75", cplfoldBeta: "0.3",
-        cplfoldAllowPseudoknot: true, cplfoldEvidence: evidence});
+        cplfoldAllowPseudoknot: true, ...from});
       target.summary.rnaNames = ["A", "B"];
-      const options = rankingOptions(target);
+      const options = rankingOptions(target), label = JSON.stringify({from, workflow});
       change(target, "workflow", workflow, handler);
-      assert.equal(target.structure.engine, "cplfold", `${workflow} retains CPLfold`);
-      assert.equal(target.structure.cplfoldMode, workflow === "short-intramolecular" ? "single" : "cofold");
-      assert.equal(target.structure.evidenceLayout, workflow === "short-intramolecular" ? "single" : "paired");
+      assert.deepEqual(steps(target), {evidence: "guided", regions: one ? "one" : "two", algorithm: one ? "cplfold" : "cplcofold"}, label);
+      assert.deepEqual([target.structure.engine, target.structure.cplfoldEvidence], ["cplfold", "hyb-blocks"], label);
+      assert.equal(target.structure.cplfoldMode, one ? "single" : "cofold");
+      assert.equal(target.structure.evidenceLayout, one ? "single" : "paired");
       assert.equal(target.structure.source, "reference");
       assert.deepEqual(rankingOptions(target), options);
       assert.deepEqual([target.structure.start, target.structure.end], ["3", "8"]);
@@ -545,23 +626,27 @@ for (const handler of ["handleChange", "handleInput"]) {
       assert.deepEqual([target.structure.secondStart, target.structure.secondEnd], workflow === "homodimer" ? ["3", "8"] : ["13", "18"]);
       assert.equal(target.structure.secondRna, ["long-intramolecular", "homodimer"].includes(workflow) ? "A" : "B");
       assert.equal(target.structure.homodimerOnly, workflow === "homodimer");
+      // COMRADES compares on the preset's regions: they, the preset and its filter stay
+      const regions = regionFields(target);
+      change(target, "stepAlgorithm", "comrades", handler);
+      assert.deepEqual(steps(target), {evidence: "guided", regions: one ? "one" : "two", algorithm: "comrades"}, label);
+      assert.deepEqual([target.structure.engine, target.structure.constraintMode, target.structure.evidenceLayout],
+        ["viennarna", "hyb-guided", one ? "single" : "paired"], label);
+      assert.deepEqual(regionFields(target), regions, label);
+      assert.deepEqual([target.structure.workflow, target.structure.homodimerOnly], [workflow, workflow === "homodimer"], label);
+      change(target, "stepAlgorithm", one ? "cplfold" : "cplcofold", handler);
+      assert.deepEqual(regionFields(target), regions, label);
       change(target, "workflow", "short-intramolecular", handler);
       assert.equal(target.structure.cplfoldMode, "single"); assert.deepEqual(rankingOptions(target), options);
       assert.equal(target.structure.homodimerOnly, false);
     }
   }
 }
-for (const workflow of ["long-intramolecular", "intermolecular", "homodimer", "short-intramolecular"]) {
-  const target = state({engine: "viennarna", source: "reference", rna: "A", start: "3", end: "8", secondRna: "B", secondStart: "13", secondEnd: "18"});
-  target.summary.rnaNames = ["A", "B"];
-  change(target, "workflow", workflow);
-  assert.equal(target.structure.engine, "viennarna"); assert.equal(target.structure.constraintMode, "hyb-guided");
-  assert.equal(target.structure.evidenceLayout, workflow === "short-intramolecular" ? "single" : "paired");
-  assert.equal(target.structure.homodimerOnly, workflow === "homodimer");
-}
-const fromPairedVienna = state({engine: "viennarna", source: "reference", evidenceLayout: "paired", cplfoldMode: "single",
+// Leaving COMRADES's two regions for CPLcofold keeps them; a model CPLcofold lacks becomes its default.
+const fromPairedVienna = state({engine: "viennarna", constraintMode: "hyb-guided", source: "reference", evidenceLayout: "paired", cplfoldMode: "single",
   rna: "A", start: "3", end: "8", secondRna: "A", secondStart: "13", secondEnd: "18", cplfoldEnergyModel: "CC09"});
-change(fromPairedVienna, "engine", "cplfold");
+assert.deepEqual(steps(fromPairedVienna), {evidence: "guided", regions: "two", algorithm: "comrades"});
+change(fromPairedVienna, "stepAlgorithm", "cplcofold");
 assert.equal(fromPairedVienna.structure.cplfoldMode, "cofold");
 assert.equal(fromPairedVienna.structure.cplfoldEnergyModel, "DP09");
 assert.deepEqual([fromPairedVienna.structure.rna, fromPairedVienna.structure.start, fromPairedVienna.structure.end,
@@ -662,7 +747,7 @@ assert.deepEqual(plain(localInfo.assembly.evidenceArms.map(a => [a.oneStart, a.o
 assert.match(pages.renderStructure(sameRna), /data-key="workflow"/);
 assert.match(pages.renderStructure(sameRna), /Region 1 start/);
 assert.match(pages.renderStructure(sameRna), /Region 2 start/);
-assert.match(pages.renderStructure(sameRna), /no intervening reference sequence/);
+assert.match(pages.renderStructure(sameRna), /no reference sequence or spacer between them/);
 assert.equal(controller.predict(sameRna, api), true);
 assert.deepEqual(plain([workers.at(-1).message.sequence, workers.at(-1).message.cutpoint]), ["GGGCCCCCCGGG", 6]);
 controller.cancel(sameRna);
@@ -689,9 +774,9 @@ change(homodimer, "workflow", "homodimer");
 change(homodimer, "secondStart", "4");
 assert.equal(homodimer.structure.workflow, "custom"); assert.equal(homodimer.structure.homodimerOnly, false);
 
-function regionHandoff(partner, partnerStart, partnerEnd) {
+function regionHandoff(partner, partnerStart, partnerEnd, overrides = {}) {
   const target = localState({cplfoldMode: "cofold", secondRna: "STALE", secondStart: "1", secondEnd: "2",
-    cplfoldEvidence: "none", cplfoldAlpha: "0.75", cplfoldBeta: "0.3", cplfoldAllowPseudoknot: true});
+    cplfoldAlpha: "0.75", cplfoldBeta: "0.3", cplfoldAllowPseudoknot: true, ...overrides});
   target.canRequestFold = false;
   const end = partnerStart === "" && partnerEnd === "" ? 12 : 8;
   target.region = {rna: "A", start: "3", end: String(end), partner, partnerStart, partnerEnd};
@@ -718,6 +803,14 @@ for (const partner of ["", "A"]) {
   assert.deepEqual([target.structure.secondRna, target.structure.secondStart, target.structure.secondEnd], ["", "", ""]);
   assert.equal(pages.getStructureSequence(target).sequence.length, 10);
 }
+// The Region page sets the Regions step only: a sequence-only fold stays
+// sequence only, RNAcofold for two regions and ViennaRNA MFE for one.
+for (const [partner, partnerStart, partnerEnd, algorithm] of [["B", "13", "18", "rnacofold"], ["", "", "", "vienna"]]) {
+  const target = regionHandoff(partner, partnerStart, partnerEnd, {engine: "viennarna", constraintMode: "none", evidenceLayout: "paired"});
+  assert.deepEqual(steps(target), {evidence: "sequence", regions: "two", algorithm: "rnacofold"});
+  controls.handleAction(target, {dataset: {featureAction: "region-send-structure"}}, api);
+  assert.deepEqual(steps(target), {evidence: "sequence", regions: partner ? "two" : "one", algorithm});
+}
 for (const [partner, start, end] of [["A", "13", ""], ["A", "", "18"], ["A", "0", "18"], ["A", 0, 0], ["A", "18", "13"], ["A", "13.5", "18"], ["", "13", "18"], ["A", "bad", "18"]]) {
   const target = regionHandoff(partner, start, end), original = plain(target.structure), navigations = api.navigations.length;
   controls.handleAction(target, {dataset: {featureAction: "region-send-structure"}}, api);
@@ -732,7 +825,7 @@ change(emptySecondRna, "workflow", "intermolecular");
 assert.equal(emptySecondRna.structure.secondRna, "B");
 assert.equal(pages.getStructureSequence(emptySecondRna).error, "");
 // Changing a ranking parameter must not silently repair an invalid energy model.
-const invalidModel = state({cplfoldEnergyModel: "CC09"});
+const invalidModel = cplState({cplfoldEnergyModel: "CC09"});
 change(invalidModel, "cplfoldAlpha", "0.75");
 assert.equal(invalidModel.structure.cplfoldEnergyModel, "CC09");
 assert.equal(controller.predict(invalidModel, api), false);
@@ -764,16 +857,19 @@ assert.equal(selectedRecord.structure.cplfoldMode, "single");
 assert.equal(selectedRecord.structure.evidenceLayout, "single");
 assert.equal(selectedRecord.structure.workflow, "custom");
 assert.equal(selectedRecord.structure.homodimerOnly, false);
-assert.equal(selectedRecord.structure.cplfoldEvidence, "none");
-assert.equal(selectedRecord.structure.constraintMode, "none");
+assert.deepEqual(steps(selectedRecord), {evidence: "sequence", regions: "one", algorithm: "vienna"});
+assert.deepEqual([selectedRecord.structure.engine, selectedRecord.structure.constraintMode], ["viennarna", "none"]);
 assert.equal(api.navigations.at(-1), "structure");
 
-// Leaving the default setup's sequence-only fallback is the user's own choice of HYB evidence.
-const fallback = state({cplfoldMode: "single", source: "reference", rna: "A", start: 1, end: 75, defaultRegionEnd: 201, evidenceFallback: "A|1|75|", evidenceSeen: "none"});
+// Leaving the default setup's sequence-only fallback (ViennaRNA MFE) is the user's own choice of HYB evidence.
+const fallback = state({engine: "viennarna", constraintMode: "none", cplfoldMode: "single", evidenceLayout: "single", cplfoldEvidence: "hyb-blocks",
+  source: "reference", rna: "A", start: 1, end: 75, defaultRegionEnd: 201, evidenceFallback: "A|1|75|", evidenceSeen: "none"});
+assert.deepEqual(steps(fallback), {evidence: "sequence", regions: "one", algorithm: "vienna"});
 assert.equal(ui.handleAction("structure-use-hyb-evidence", fallback, api), true);
 assert.deepEqual(plain([fallback.structure.cplfoldEvidence, fallback.structure.evidenceChosen, fallback.structure.evidenceFallback === undefined, fallback.structure.source]), ["hyb-blocks", true, true, "reference"]);
+assert.deepEqual(steps(fallback), {evidence: "guided", regions: "one", algorithm: "cplfold"});
 assert.equal(pages.syncDefaultStructureEvidence(fallback), false);
-assert.equal(fallback.structure.cplfoldEvidence, "hyb-blocks", "the default-setup fallback leaves a chosen evidence mode alone");
+assert.deepEqual(steps(fallback), {evidence: "guided", regions: "one", algorithm: "cplfold"}, "the default-setup fallback leaves a chosen evidence alone");
 
 // Both pair kernels bypass the independent post-scoring worker. Exercise each
 // transport and strand layout; switching candidates must switch C, never B.

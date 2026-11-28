@@ -54,16 +54,11 @@ const (
 
 var stWorkflows = []string{stWorkflowCustom, stWorkflowShort, stWorkflowLong, stWorkflowInter, stWorkflowHomodimer}
 
-// stWorkflowLabels are the web's labels: CPLfold's name the engine each
-// preset runs, ViennaRNA's the interaction.
-func stWorkflowLabels(cpl bool) []string {
-	if cpl {
-		return []string{"Custom engine and reference layout", "One local region · CPLfold",
-			"Two local regions of the same RNA · CPLcofold", "Two local regions of different RNAs · CPLcofold", "Homodimer (overlap ≥ 5)"}
-	}
-	return []string{"Custom engine and reference layout", "Short-ranged intramolecular (<500 nt)",
-		"Long-ranged intramolecular", "Intermolecular", "Homodimer (overlap ≥ 5)"}
-}
+// stWorkflowLabels are the web's labels of stWorkflows: the interaction,
+// its regions and the algorithm the preset sets.
+var stWorkflowLabels = []string{"Custom", "Short-range · one region · CPLfold",
+	"Long-range · two regions of one RNA · CPLcofold", "Intermolecular · two RNAs · CPLcofold",
+	"Homodimer · the same region twice · CPLcofold"}
 
 // stWorkflowSnap is what a preset sets.
 type stWorkflowSnap struct {
@@ -82,12 +77,12 @@ func stCPL(engine string) bool { return engine == engineCPLfold || engine == eng
 
 func (p *structurePage) workflow() string { return nameOr(p.setup.workflow, stWorkflowCustom) }
 
-// applyWorkflow sets the form as the web's preset does, on the desktop's
-// engines: with CPLfold, one region runs CPLfold and two run CPLcofold
-// (DP09 unless DP03 or DP09 is chosen); otherwise COMRADES(ViennaRNA)
-// folds one region, or two joined by the 100-nt spacer, with the homodimer
-// proxy filter for the homodimer preset. A region from a CPLcofold or
-// windows form carries over as the one region or region 1.
+// applyWorkflow sets the form as the web's preset does: the three steps,
+// guided by the chimeras, with CPLfold for one region and CPLcofold for two
+// (DP09 unless DP03 or DP09 is chosen). COMRADES can be chosen afterwards
+// on the same regions; for it, the homodimer preset also sets the
+// homodimer proxy filter. A region from a two-region or windows form
+// carries over as the one region or region 1.
 func (p *structurePage) applyWorkflow(value string) {
 	s := &p.setup
 	s.workflow = value
@@ -102,18 +97,9 @@ func (p *structurePage) applyWorkflow(value string) {
 	}
 	one := value == stWorkflowShort
 	p.setSource(stSourceReference)
-	if stCPL(p.engine) {
-		if one {
-			p.engine = engineCPLfold
-		} else {
-			p.engine = engineCPLcofold
-		}
-	} else {
-		p.engine = engineComrades
-		p.homodimerOnly = value == stWorkflowHomodimer
-		if !one {
-			p.mode = "paired"
-		}
+	p.engine, p.homodimerOnly = engineCPLcofold, value == stWorkflowHomodimer
+	if one {
+		p.engine = engineCPLfold
 	}
 	if one && stWindowLine.MatchString(strings.TrimSpace(p.region1)) {
 		// Carry the coordinates as entered; the single-strand window check owns their order and length.
@@ -193,12 +179,6 @@ func (p *structurePage) workflowProblems(pl *foldPlan) {
 		return
 	}
 	same := nameOr(p.gene2, p.gene) == p.gene
-	if !stCPL(p.engine) {
-		if wf == stWorkflowInter && same {
-			pl.problems = append(pl.problems, "Intermolecular folding requires two different RNAs. Choose a different Region 2 RNA.")
-		}
-		return
-	}
 	switch {
 	case wf == stWorkflowInter && same:
 		pl.problems = append(pl.problems, "Choose different RNAs for the intermolecular preset, or use the two-regions-of-the-same-RNA preset.")
@@ -211,12 +191,8 @@ func (p *structurePage) workflowProblems(pl *foldPlan) {
 
 // workflowField is the web's "Folding workflow" select, with its note.
 func (p *structurePage) workflowField(c *ui.Context) {
-	if p.engine == engineIRIS {
-		return // the web hides the workflow for IRIS: one reference region
-	}
 	t := c.Theme()
-	cpl := stCPL(p.engine)
-	labels := stWorkflowLabels(cpl)
+	labels := stWorkflowLabels
 	wf := p.workflow()
 	current := labels[max(slices.Index(stWorkflows, wf), 0)]
 	Field(c, "Folding workflow", func() {
@@ -228,16 +204,11 @@ func (p *structurePage) workflowField(c *ui.Context) {
 		if wf == stWorkflowCustom {
 			return
 		}
-		note := "ViennaRNA presets use HYB-guided evidence. Short-range uses one region; long-range uses two regions of the same RNA. " +
-			"Intermolecular uses two different RNAs; homodimer uses two copies of one RNA and overlap score ≥ 5. " +
-			"Paired layouts include the original 100 nt spacer."
-		if cpl {
-			note = "With CPLfold selected, one-region presets run CPLfold; two-region presets run CPLcofold and preserve the selected reads, " +
-				"alpha, beta and pseudoknot settings. Same-RNA regions are folded as two excised fragments, with a strand break " +
-				"and no intervening reference sequence or artificial spacer."
-		}
-		ui.Text(c, note).FontSize(FontSmall).TextColor(t.TextMuted)
-		if cpl && wf == stWorkflowHomodimer {
+		ui.Text(c, "Each preset sets Evidence, Regions and Algorithm. Short-range folds one region with CPLfold. Long-range "+
+			"(two regions of one RNA), intermolecular (two RNAs) and homodimer (the same region twice) fold two regions with "+
+			"CPLcofold, as two excised fragments with a strand break and no reference sequence or spacer between them. "+
+			"Choose COMRADES as the Algorithm afterwards to compare on the same regions.").FontSize(FontSmall).TextColor(t.TextMuted)
+		if wf == stWorkflowHomodimer {
 			// the web filters CPLcofold's rows to homodimers; the desktop
 			// CPLcofold reads no overlap score
 			Notice(c, "Desktop CPLcofold has no homodimer filter: every eligible HYB row contributes, not only those with overlap score ≥ 5.", t.Warning)
@@ -322,7 +293,7 @@ func (p *structurePage) prepared(pl foldPlan, read bool) (parts []stPrepared, la
 		default:
 			window := seq.window(from, to)
 			bad := seq.invalid
-			if bad != "" && p.engine == engineCPLcofold {
+			if bad != "" && (p.engine == engineCPLcofold || p.engine == engineRNAcofold) { // two strands: only the regions
 				bad = strings.Join(stInvalidBases(window), ", ")
 			}
 			if bad == "" {
@@ -342,7 +313,7 @@ func (p *structurePage) prepared(pl foldPlan, read bool) (parts []stPrepared, la
 		}
 		gap := 0
 		part := stPrepared{seq: s1 + s2, cutpoint: len(s1)}
-		if p.engine != engineCPLcofold { // COMRADES: joined by the spacer
+		if p.engine == engineComrades { // joined by the spacer
 			gap = len(stSpacer)
 			part = stPrepared{seq: s1 + stSpacer + s2, linker: true}
 		}
@@ -599,7 +570,7 @@ type stLocalRun struct {
 
 // localRun is the form's fold of part, its one prepared sequence.
 func (p *structurePage) localRun(pl foldPlan, part stPrepared) stLocalRun {
-	return stLocalRun{cofold: p.engine == engineCPLcofold, guided: !p.seqOnly, pseudoknot: pl.pk, beam: int(p.beam),
+	return stLocalRun{cofold: p.engine == engineCPLcofold, guided: true, pseudoknot: pl.pk, beam: int(p.beam),
 		phase1: int(p.phase1), delta: p.delta, beta: p.beta, alpha: p.alpha, model: p.model, length: len(part.seq)}
 }
 
@@ -825,7 +796,7 @@ func (p *structurePage) evidenceProvenance(c *ui.Context, a *structureResult) {
 	// as the web's, against the evidence the form would fold with now:
 	// none for a form set to fold without chimeras
 	current := p.evidenceIDs()
-	if p.engine == engineVienna || (p.seqOnly && stCPL(p.engine)) {
+	if !stGuidedEngine(p.engine) {
 		current = nil
 	}
 	now := slices.Clone(current)

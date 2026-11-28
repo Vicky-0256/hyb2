@@ -185,15 +185,17 @@ func (p *structurePage) plan() foldPlan {
 		pl.problems = append(pl.problems, "Choose the RNA and its reference to fold.")
 	case len(a.SelectionOptions()) == 0:
 		pl.problems = append(pl.problems, "No sample has been analysed yet: run the pipeline on the Data page first, then come back.")
-	case len(pl.ids) == 0:
+	case len(pl.ids) == 0 && stGuidedEngine(p.engine):
 		pl.problems = append(pl.problems, "Choose the samples whose chimeric reads guide the fold.")
+	case len(pl.ids) == 0:
+		pl.problems = append(pl.problems, "Choose the samples whose reference to fold.")
 	default:
 		if msg := p.evidenceMismatch(); msg != "" {
 			pl.problems = append(pl.problems, msg)
 		}
 	}
 	p.workflowProblems(&pl)
-	if p.engine == engineCPLcofold {
+	if p.engine == engineCPLcofold || p.engine == engineRNAcofold {
 		p.cofoldPlan(&pl)
 		p.checkBudget(&pl)
 		return pl
@@ -242,11 +244,7 @@ func (p *structurePage) plan() foldPlan {
 			pl.limits = append(pl.limits, "Pseudoknots are off: crossing pairs are not predicted.")
 		}
 	}
-	if p.seqOnly && p.engine == engineCPLfold {
-		pl.limits = append(pl.limits, "Sequence only: the chimeric reads are not used; the samples only give the reference.")
-	} else {
-		pl.limits = append(pl.limits, "Only chimeras with both arms inside the folded region are used as evidence.")
-	}
+	pl.limits = append(pl.limits, "Only chimeras with both arms inside the folded region are used as evidence.")
 	if p.engine != engineCPLfold {
 		p.viennaPlan(&pl)
 	} else {
@@ -337,26 +335,30 @@ func (p *structurePage) twoRegions(pl *foldPlan) (r1, r2 core.Region, ok bool) {
 	return r1, r2, err1 == "" && err2 == "" && pl.length > 0 && length2 > 0 && pl.referenceID != "" && pl.referenceID == pl.referenceID2
 }
 
-// cofoldPlan: two regions folded as two strands with CPLcofold, the web's
-// two-region CPLfold layout (one RNA or two RNAs of one reference).
+// cofoldPlan: two regions folded as two strands (one RNA or two RNAs of one
+// reference), with CPLcofold and the chimeras (the web's two-region CPLfold
+// layout) or with RNAcofold from their sequences alone.
 func (p *structurePage) cofoldPlan(pl *foldPlan) {
 	r1, r2, ok := p.twoRegions(pl)
-	params := p.cplParameters(pl, p.pseudoknot)
-	mode, engine, one := "cofold", engineCPLcofold, uint32(1)
-	pl.req = core.TaskStartRequest{Kind: "structure", SampleIDs: pl.ids, GeneID: &pl.gene, Mode: &mode, Engine: &engine,
-		Regions: []core.Region{r1, r2}, Parameters: params, Workers: &one}
-	pl.what, pl.pk, pl.windows, pl.lengths = "2 regions as two strands", p.pseudoknot, nil, nil
+	mode, one := "cofold", uint32(1)
+	pl.req = core.TaskStartRequest{Kind: "structure", SampleIDs: pl.ids, GeneID: &pl.gene, Mode: &mode,
+		Regions: []core.Region{r1, r2}, Workers: &one}
+	pl.what, pl.windows, pl.lengths = "2 regions as two strands", nil, nil
 	if ok {
 		pl.lengths = []int{int(r1.End - r1.Start + 1), int(r2.End - r2.Start + 1)}
+	}
+	pl.limits = []string{"Region 1 is strand A and region 2 strand B, each 5′→3′; the sequence between them is not folded."}
+	if p.engine == engineRNAcofold {
+		p.rnacofoldPlan(pl)
+		return
+	}
+	engine := engineCPLcofold
+	pl.req.Engine, pl.req.Parameters, pl.pk = &engine, p.cplParameters(pl, p.pseudoknot), p.pseudoknot
+	if ok {
 		pl.memMB = core.StructureClaimMB(pl.lengths[0]+pl.lengths[1], p.pseudoknot, 1)
 		pl.req.MemMB = &pl.memMB
 	}
-	pl.limits = []string{"Region 1 is strand A and region 2 strand B, each 5′→3′; the sequence between them is not folded."}
-	if p.seqOnly {
-		pl.limits = append(pl.limits, "Sequence only: the chimeric reads are not used; the samples only give the reference.")
-	} else {
-		pl.limits = append(pl.limits, "Chimeras with one arm in each region join the strands; chimeras with both arms in one region are evidence within it.")
-	}
+	pl.limits = append(pl.limits, "Chimeras with one arm in each region join the strands; chimeras with both arms in one region are evidence within it.")
 	if !p.pseudoknot {
 		pl.limits = append(pl.limits, "Pseudoknots are off: crossing pairs are not predicted.")
 	}
@@ -381,15 +383,9 @@ func (p *structurePage) cplParameters(pl *foldPlan, pk bool) map[string]any {
 	e.Ranges["energyDelta"].check(pl, "Energy window", p.delta, false)
 	e.Ranges["alpha"].check(pl, "Evidence weight", p.alpha, false)
 	e.Ranges["beta"].check(pl, "Pseudoknot beta", p.beta, false)
-	params := map[string]any{"alpha": p.alpha, "beam": int(p.beam), "max_phase1": int(p.phase1),
-		"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": pk}
-	if !p.seqOnly {
-		params["support_kernel"] = p.kernelParameter(pl)
-	}
-	if p.seqOnly {
-		params["evidence"] = "none"
-	}
-	return params
+	return map[string]any{"alpha": p.alpha, "beam": int(p.beam), "max_phase1": int(p.phase1),
+		"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": pk,
+		"support_kernel": p.kernelParameter(pl)}
 }
 
 // ---- the sequence source
@@ -554,10 +550,9 @@ func (p *structurePage) loadRecords() {
 	})
 }
 
-// sequencePlan: a pasted or HYB record sequence folded whole, or two pasted
-// strands with CPLcofold. As the web, chimeras guide only the fold of a
-// reference region: the runtime folds a sequence found exactly once in the
-// samples' reference as that region, and any other from the sequence alone.
+// sequencePlan: a pasted or HYB record sequence folded whole with ViennaRNA
+// MFE, or two pasted strands with RNAcofold, from the sequence alone: as
+// the web, the chimeras guide only the fold of a reference region.
 func (p *structurePage) sequencePlan() foldPlan {
 	a := p.a
 	pl := foldPlan{ids: p.evidenceIDs(), evidence: p.evidenceLabel()}
@@ -565,15 +560,15 @@ func (p *structurePage) sequencePlan() foldPlan {
 	case len(a.SelectionOptions()) == 0:
 		pl.problems = append(pl.problems, "No sample has been analysed yet: run the pipeline on the Data page first, then come back.")
 	case len(pl.ids) == 0:
-		pl.problems = append(pl.problems, "Choose the samples: their reference is searched for the sequence.")
+		pl.problems = append(pl.problems, "Choose the samples the fold is filed with; their chimeric reads are not used.")
 	case a.Project.Reference(p.selectedReferenceID()) == nil:
 		pl.problems = append(pl.problems, "The selected samples must share one reference. Choose samples mapped to the same reference.")
 	}
-	cofold, record := p.engine == engineCPLcofold, p.src.kind == stSourceRecord
+	cofold, record := p.engine == engineRNAcofold, p.src.kind == stSourceRecord
 	var strands []string
 	switch {
 	case record && cofold:
-		pl.problems = append(pl.problems, "A HYB record is one chimeric read, not two strands: paste RNA A and RNA B for CPLcofold, or choose another engine.")
+		pl.problems = append(pl.problems, "A HYB record is one chimeric read, not two strands: paste RNA A and RNA B for RNAcofold, or choose One region.")
 	case record:
 		r := p.src.record
 		switch {
@@ -636,79 +631,34 @@ func (p *structurePage) sequencePlan() foldPlan {
 	if record {
 		pl.what = "the record's sequence"
 	}
-	found := "Chimeras guide the fold only if the sequence occurs exactly once in the samples' reference: it is then folded as that region. " +
-		"Otherwise it is folded from the sequence alone."
-	switch p.engine {
-	case engineCPLcofold:
-		mode = "cofold"
-		engine := engineCPLcofold
-		pl.req.Engine, pl.req.Parameters = &engine, p.cplParameters(&pl, p.pseudoknot)
-		pl.what, pl.pk = "2 pasted strands", p.pseudoknot
-		if len(strands) == 2 {
-			pl.memMB = core.StructureClaimMB(pl.length, p.pseudoknot, 1)
-			pl.req.MemMB = &pl.memMB
-		}
-		pl.limits = []string{"RNA A is strand A and RNA B strand B, each 5′→3′."}
-		if p.seqOnly {
-			pl.limits = append(pl.limits, "Sequence only: the chimeric reads are not used.")
-		} else {
-			pl.limits = append(pl.limits, "Chimeras guide the fold only if both strands occur exactly once in the samples' reference: "+
-				"they are then folded as those regions. Otherwise the strands are folded from the sequence alone.")
-		}
-		if !p.pseudoknot {
-			pl.limits = append(pl.limits, "Pseudoknots are off: crossing pairs are not predicted.")
-		}
-	case engineCPLfold:
-		pl.pk = p.pseudoknot
-		pl.req.Parameters = p.cplParameters(&pl, pl.pk)
-		if len(strands) > 0 {
-			pl.memMB = StructureMemClaim(pl.req, pl.length, pl.pk)
-			pl.req.MemMB = &pl.memMB
-		}
-		if !pl.pk {
-			pl.limits = append(pl.limits, "Folded whole: no pseudoknots.")
-		}
-		if p.seqOnly {
-			pl.limits = append(pl.limits, "Sequence only: the chimeric reads are not used.")
-		} else {
-			pl.limits = append(pl.limits, found)
-		}
-	default: // ViennaRNA MFE, COMRADES(ViennaRNA)
+	if cofold {
+		pl.what, pl.limits = "2 pasted strands", []string{"RNA A is strand A and RNA B strand B, each 5′→3′."}
+		p.rnacofoldPlan(&pl)
+	} else {
 		p.viennaPlan(&pl)
-		if p.engine == engineComrades {
-			pl.limits = append([]string{p.comradesName() + " needs chimeras: the sequence must occur exactly once in the samples' " +
-				"reference, and is then folded as that region; otherwise the fold stops and says so."}, pl.limits...)
-		} else {
-			pl.limits = []string{"ViennaRNA MFE folds the sequence alone; hard pairs are positions on it.",
-				"No pseudoknots: ViennaRNA returns a nested structure."}
-			if pl.length > stViennaMaxNT {
-				pl.problems = append(pl.problems, fmt.Sprintf("ViennaRNA MFE folds at most %s nt; paste a shorter sequence.",
-					FormatNumber(stViennaMaxNT)))
-			}
+		pl.limits = []string{"ViennaRNA MFE folds the sequence alone; hard pairs are positions on it.",
+			"No pseudoknots: ViennaRNA returns a nested structure."}
+		if pl.length > stViennaMaxNT {
+			pl.problems = append(pl.problems, fmt.Sprintf("ViennaRNA MFE folds at most %s nt; paste a shorter sequence.",
+				FormatNumber(stViennaMaxNT)))
 		}
 	}
 	if record {
 		pl.limits = append(pl.limits, "A HYB record's sequence is one chimeric read, both arms joined: not necessarily a whole RNA or a region of it.")
 	}
-	if pl.evidence != "" && p.engine != engineVienna && !(p.seqOnly && p.engine != engineComrades) {
-		pl.evidence += ", used only if the sequence occurs in their reference"
-	}
 	p.checkBudget(&pl)
 	return pl
 }
 
-// sourceField: where the sequence comes from, and the record or pasted
-// sequences when it is not a reference region.
+// sourceField: where a sequence-only fold's sequence comes from, and the
+// record or pasted sequences when it is not a reference region.
 func (p *structurePage) sourceField(c *ui.Context, pl foldPlan) {
 	t := c.Theme()
-	cofold := p.engine == engineCPLcofold
+	cofold := p.engine == engineRNAcofold
 	labels, kinds := stSourceLabels, stSourceKinds
 	if cofold {
 		// a record is one chimeric read, not two strands
 		labels, kinds = []string{labels[0], labels[2]}, []string{kinds[0], kinds[2]}
-	}
-	if p.engine == engineIRIS {
-		labels, kinds = labels[:1], kinds[:1] // a region with its chimeras
 	}
 	current := labels[0]
 	for i, k := range kinds {
@@ -716,11 +666,11 @@ func (p *structurePage) sourceField(c *ui.Context, pl foldPlan) {
 			current = labels[i]
 		}
 	}
-	label := "Sequence source"
+	title := "Sequence source"
 	if p.src.kind != stSourceReference {
-		label = "1  Sequence source"
+		title = "4  Sequence source" // instead of the RNA to fold
 	}
-	Field(c, label, func() {
+	Field(c, title, func() {
 		if ui.Select(c.Key("st-source"), &current, labels).FillWidth().Label("Sequence source").Changed() {
 			for i, l := range labels {
 				if l == current {
@@ -742,7 +692,6 @@ func (p *structurePage) sourceField(c *ui.Context, pl foldPlan) {
 					Label("RNA B sequence (strand B)")
 				ui.Text(c, "The first box is RNA A. Alternatively paste A&B there and leave RNA B empty.").
 					FontSize(12).TextColor(t.TextMuted)
-				ui.Checkbox(c.Key("st-pk"), &p.pseudoknot, "Allow pseudoknots")
 			} else {
 				ui.Text(c, "A, C, G and U; T is read as U, spaces and a FASTA header line are ignored.").
 					FontSize(12).TextColor(t.TextMuted)
@@ -816,9 +765,14 @@ func (p *structurePage) form(c *ui.Context) {
 	p.syncWorkflow()
 	pl := p.plan()
 	card := Card(c, "New fold", func() {
-		intro := "Predict the secondary structure of one RNA, guided by the chimeric reads of your samples."
-		if p.engine == engineCPLcofold || (p.engine == engineComrades && p.mode == "paired") {
-			intro = "Fold two regions, of one RNA or of two RNAs, guided by the chimeric reads of your samples."
+		intro := "Predict the secondary structure of one RNA"
+		if p.twoRegionsForm() {
+			intro = "Fold two regions, of one RNA or of two RNAs"
+		}
+		if stGuidedEngine(p.engine) {
+			intro += ", guided by the chimeric reads of your samples."
+		} else {
+			intro += ", from the sequence alone."
 		}
 		ui.Text(c, intro).
 			FontSize(12).TextColor(t.TextMuted)
@@ -826,14 +780,16 @@ func (p *structurePage) form(c *ui.Context) {
 			Notice(c, p.prefillNote, t.Accent)
 		}
 		p.workflowField(c)
+		p.stepFields(c)
 		p.inputs(c, pl)
 		p.previewPanel(c, pl)
-		if p.engine == engineIRIS {
+		switch {
+		case p.engine == engineIRIS:
 			p.irisAdvanced(c)
-		} else if p.engine != engineCPLfold && p.engine != engineCPLcofold {
-			p.viennaAdvanced(c)
-		} else {
+		case stCPL(p.engine):
 			p.advanced(c)
+		default:
+			p.viennaAdvanced(c)
 		}
 	})
 	// Cmd+Enter (Ctrl+Enter) runs the fold from anywhere in the form.
@@ -862,7 +818,8 @@ func (p *structurePage) runPanel(c *ui.Context) {
 	})
 }
 
-// inputs: the RNA, the evidence and the mode.
+// inputs: the sequence source (sequence only), the RNA or two regions, the
+// samples and what to fold.
 func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 	a := p.a
 	t := c.Theme()
@@ -897,13 +854,14 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 			}
 		}
 	}
-	cofold := p.engine == engineCPLcofold
-	twoRegions := cofold || (p.engine == engineComrades && p.mode == "paired")
-	first := "1  RNA to fold"
+	cofold, guided, twoRegions := p.engine == engineCPLcofold, stGuidedEngine(p.engine), p.twoRegionsForm()
+	first := "4  RNA to fold"
 	if twoRegions {
-		first = "1  Region 1 (strand A)"
+		first = "4  Region 1 (strand A)"
 	}
-	p.sourceField(c, pl)
+	if !guided {
+		p.sourceField(c, pl) // the chimeras guide only the fold of a reference region
+	}
 	reference := p.src.kind == stSourceReference
 	if reference {
 		Field(c, first, func() {
@@ -929,14 +887,12 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 			currentEv = evLabels[i]
 		}
 	}
-	evidenceLabel := "2  Evidence: chimeric reads of"
+	evidenceLabel := "5  Samples: their chimeric reads guide the fold"
 	switch {
-	case !reference && (p.engine == engineVienna || (p.seqOnly && (p.engine == engineCPLfold || cofold))):
-		evidenceLabel = "2  Samples (their chimeric reads are not used)"
-	case !reference:
-		evidenceLabel = "2  Evidence: chimeric reads of (used if the sequence is in their reference)"
-	case p.engine == engineVienna || (p.seqOnly && (p.engine == engineCPLfold || cofold)):
-		evidenceLabel = "2  Samples (their reference is folded)"
+	case !guided && !reference:
+		evidenceLabel = "5  Samples (their chimeric reads are not used)"
+	case !guided:
+		evidenceLabel = "5  Samples (their reference is folded)"
 	}
 	Field(c, evidenceLabel, func() {
 		if len(evLabels) == 0 {
@@ -944,7 +900,7 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 				FontSize(12).TextColor(t.TextMuted)
 			return
 		}
-		ui.Select(c.Key("st-evidence"), &currentEv, evLabels).FillWidth().Label("Evidence").
+		ui.Select(c.Key("st-evidence"), &currentEv, evLabels).FillWidth().Label("Samples for this fold").
 			OnChange(func() { p.evidence, p.pinned = keys[currentEv], nil })
 		switch {
 		case p.pinned != nil:
@@ -957,15 +913,9 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 		case len(pl.ids) > 0:
 			ui.Text(c, "Samples: "+p.sampleNames(pl.ids)).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
-		if p.engine == engineCPLfold || cofold {
-			ui.Checkbox(c.Key("st-seqonly"), &p.seqOnly, "Sequence only: fold without the chimeric reads").
-				Tooltip("As the web's sequence-only CPLfold; the samples then only give the reference")
-		}
 	})
 	if !reference {
-		// a pasted or record sequence is folded whole
-		p.engineFields(c)
-		return
+		return // a pasted or record sequence is folded whole
 	}
 	region2 := func(label string) {
 		Field(c, label, func() {
@@ -973,8 +923,8 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 				OnChange(func() { p.gene2, p.referenceID2 = names[second].name, names[second].reference })
 			ui.TextInput(c.Key("st-region2"), &p.region2).Placeholder("start-end, e.g. 1086-1134").Label("Region 2")
 			note := "The same RNA as region 1: a long-range interaction. Another RNA: an intermolecular one."
-			if !cofold {
-				note += " The same region twice, with homodimer proxies only (ViennaRNA settings): a homodimer."
+			if p.engine == engineComrades {
+				note += " The same region twice, with homodimer proxies only (COMRADES settings): a homodimer."
 			}
 			if len(pl.lengths) == 2 {
 				note = pl.span() + " · " + note
@@ -985,28 +935,21 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 			}
 		})
 	}
-	if cofold {
-		region2("3  Region 2 (strand B)")
+	if twoRegions {
+		region2("6  Region 2 (strand B)")
 	} else {
 		p.whatToFold(c, pl)
-		if twoRegions {
-			region2("Region 2 (strand B)")
-		}
 	}
-	p.engineFields(c)
+	p.topologyField(c)
 }
 
-// whatToFold: the whole RNA or windows (CPLfold, ViennaRNA, COMRADES), or
-// two regions joined by the web's spacer (COMRADES).
+// whatToFold: the whole RNA or windows of one region.
 func (p *structurePage) whatToFold(c *ui.Context, pl foldPlan) {
 	t := c.Theme()
-	Field(c, "3  What to fold", func() {
+	Field(c, "6  What to fold", func() {
 		ui.RadioGroup(c.Key("st-mode"), func() {
 			ui.Radio(c, &p.mode, "genome", "The whole RNA")
 			ui.Radio(c, &p.mode, "windows", "Regions (windows)")
-			if p.engine == engineComrades {
-				ui.Radio(c, &p.mode, "paired", "Two regions joined by a 100-nt spacer (long-range, intermolecular or homodimer)")
-			}
 		}).Label("What to fold")
 		if text := p.limitText(pl); text != "" {
 			ui.Text(c, text).FontSize(FontSmall).TextColor(t.TextMuted)
@@ -1024,38 +967,124 @@ func (p *structurePage) whatToFold(c *ui.Context, pl foldPlan) {
 	}
 }
 
-// engineFields: the engine choice and, for single-strand CPLfold, the same
-// topology choice for every sequence source.
-func (p *structurePage) engineFields(c *ui.Context) {
-	if p.engine == engineCPLfold && p.mode != "paired" {
-		Field(c, "Structure topology", func() {
-			// p.topology follows p.pseudoknot when something else set it
-			if p.topology == "" || p.pseudoknot != p.lastPK {
-				p.topology = map[bool]string{true: "pseudoknot", false: "secondary"}[p.pseudoknot]
-			}
-			ui.RadioGroup(c.Key("st-topology"), func() {
-				ui.Radio(c, &p.topology, "pseudoknot", "Allow pseudoknots: run Phase 2 to search for crossing base pairs")
-				ui.Radio(c, &p.topology, "secondary", "Secondary structure only: Phase 1 candidates, no pseudoknot search")
-			}).Label("Structure topology")
-			p.pseudoknot = p.topology == "pseudoknot"
-			p.lastPK = p.pseudoknot
-			ui.Text(c, "CPLfold can search crossing pairs. ViennaRNA remains pseudoknot-free.").FontSize(FontSmall).TextColor(c.Theme().TextMuted)
-		})
+// topologyField: CPLfold's choice of pseudoknots for one region.
+func (p *structurePage) topologyField(c *ui.Context) {
+	if p.engine != engineCPLfold {
+		return
 	}
-	Field(c, "4  Engine", func() {
-		ui.RadioGroup(c.Key("st-engine"), func() {
-			ui.Radio(c, &p.engine, engineCPLfold, "CPLfold, guided by the chimeric reads").OnChange(p.engineChanged)
-			ui.Radio(c, &p.engine, engineCPLcofold, "CPLcofold, two regions as two strands (one RNA or two RNAs)").OnChange(p.engineChanged)
-			ui.Radio(c, &p.engine, engineVienna, "ViennaRNA MFE, the sequence alone (optional hard pairs)").OnChange(p.engineChanged)
-			ui.Radio(c, &p.engine, engineComrades, "COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras").OnChange(p.engineChanged)
-			ui.Radio(c, &p.engine, engineIRIS, "IRIS · evidence-guided ensemble").OnChange(p.engineChanged)
-		}).Label("Engine")
+	Field(c, "Structure topology", func() {
+		// p.topology follows p.pseudoknot when something else set it
+		if p.topology == "" || p.pseudoknot != p.lastPK {
+			p.topology = map[bool]string{true: "pseudoknot", false: "secondary"}[p.pseudoknot]
+		}
+		ui.RadioGroup(c.Key("st-topology"), func() {
+			ui.Radio(c, &p.topology, "pseudoknot", "Allow pseudoknots: run Phase 2 to search for crossing base pairs")
+			ui.Radio(c, &p.topology, "secondary", "Secondary structure only: Phase 1 candidates, no pseudoknot search")
+		}).Label("Structure topology")
+		p.pseudoknot = p.topology == "pseudoknot"
+		p.lastPK = p.pseudoknot
+		ui.Text(c, "CPLfold can search crossing pairs. ViennaRNA remains pseudoknot-free.").FontSize(FontSmall).TextColor(c.Theme().TextMuted)
 	})
 }
 
-// engineChanged keeps "What to fold" valid for the new engine: two regions
-// joined by the spacer are a COMRADES layout only. As the web, CPLcofold
-// takes pasted strands instead of a HYB record.
+// ---- the setup steps
+
+// The setup's three steps, as the web's (web/analysis-data.js
+// structureSteps): Evidence (guided by the samples' chimeras, or the
+// sequence only), Regions (one, or two) and the Algorithm they offer.
+// p.engine is the algorithm; COMRADES of two regions is p.mode "paired".
+
+// stAlgorithms are the algorithms an Evidence and Regions step offer,
+// default first: Hyb2's own, then those for comparison; without the
+// chimeras, ViennaRNA's MFE.
+func stAlgorithms(guided, two bool) []string {
+	switch {
+	case guided && two:
+		return []string{engineCPLcofold, engineComrades}
+	case guided:
+		return []string{engineCPLfold, engineComrades, engineIRIS}
+	case two:
+		return []string{engineRNAcofold}
+	}
+	return []string{engineVienna}
+}
+
+// stAlgorithmLabels name the algorithms in the Algorithm step, as the web.
+var stAlgorithmLabels = map[string]string{
+	engineCPLfold:   "CPLfold · Hyb2",
+	engineCPLcofold: "CPLcofold · Hyb2",
+	engineComrades:  "COMRADES · for comparison",
+	engineIRIS:      "IRIS · for comparison",
+	engineVienna:    "ViennaRNA MFE",
+	engineRNAcofold: "RNAcofold",
+}
+
+// stAlgorithmNotes say what each algorithm does.
+var stAlgorithmNotes = map[string]string{
+	engineCPLfold:   "Hyb2's fold: the chimeras become a bonus matrix that guides a beam search of Turner energies; pseudoknots are optional.",
+	engineCPLcofold: "Hyb2's fold of two strands: chimeras with one arm in each region join them.",
+	engineComrades:  "Stems from RNAcofold of each chimera, fitted as hard pairs with ViennaRNA or mfold (COMRADES settings); two regions are joined by the original 100-nt spacer.",
+	engineIRIS:      "A weighted ensemble of one to three structures built from the stems the chimeras support.",
+	engineVienna:    "The minimum-free-energy structure of the sequence alone, with optional hard pairs.",
+	engineRNAcofold: "The minimum-free-energy structure of the two strands, from their sequences alone.",
+}
+
+// stGuidedEngine: the algorithm folds with the samples' chimeras.
+func stGuidedEngine(engine string) bool { return engine != engineVienna && engine != engineRNAcofold }
+
+// twoRegionsForm: the form folds two regions (or two pasted strands).
+func (p *structurePage) twoRegionsForm() bool {
+	return p.engine == engineCPLcofold || p.engine == engineRNAcofold || (p.engine == engineComrades && p.mode == "paired")
+}
+
+// setSteps sets the Evidence and Regions steps. As the web's
+// setStructureSteps, the algorithm is kept while they still offer it, else
+// it becomes their default.
+func (p *structurePage) setSteps(guided, two bool) {
+	if offered := stAlgorithms(guided, two); !slices.Contains(offered, p.engine) {
+		p.engine = offered[0]
+	}
+	switch {
+	case p.engine == engineComrades && two:
+		p.mode = "paired"
+	case p.mode == "paired" && !two:
+		p.mode = "genome"
+	}
+	p.engineChanged()
+}
+
+// stepFields: 1 Evidence, 2 Regions and 3 the Algorithm they offer.
+func (p *structurePage) stepFields(c *ui.Context) {
+	t := c.Theme()
+	guided, two := stGuidedEngine(p.engine), p.twoRegionsForm()
+	evidence, regions := map[bool]string{true: "guided", false: "sequence"}[guided], map[bool]string{true: "two", false: "one"}[two]
+	Field(c, "1  Evidence", func() {
+		ui.RadioGroup(c.Key("st-step-evidence"), func() {
+			ui.Radio(c, &evidence, "guided", "Guided by HYB chimeras").OnChange(func() { p.setSteps(true, two) })
+			ui.Radio(c, &evidence, "sequence", "Sequence only").OnChange(func() { p.setSteps(false, two) })
+		}).Label("Evidence")
+	})
+	Field(c, "2  Regions", func() {
+		ui.RadioGroup(c.Key("st-step-regions"), func() {
+			ui.Radio(c, &regions, "one", "One region").OnChange(func() { p.setSteps(guided, false) })
+			ui.Radio(c, &regions, "two", "Two regions").OnChange(func() { p.setSteps(guided, true) })
+		}).Label("Regions")
+		ui.Text(c, "One region: the whole RNA or windows of it. Two regions: of one RNA or of two RNAs.").
+			FontSize(FontSmall).TextColor(t.TextMuted)
+	})
+	Field(c, "3  Algorithm", func() {
+		ui.RadioGroup(c.Key("st-engine"), func() {
+			for _, engine := range stAlgorithms(guided, two) {
+				ui.Radio(c, &p.engine, engine, stAlgorithmLabels[engine]).OnChange(func() { p.setSteps(guided, two) })
+			}
+		}).Label("Algorithm")
+		ui.Text(c, stAlgorithmNotes[p.engine]).FontSize(FontSmall).TextColor(t.TextMuted)
+	})
+}
+
+// engineChanged keeps the form valid for the algorithm: two regions joined
+// by the spacer are a COMRADES layout only, and as the web, a guided fold
+// reads a reference region and RNAcofold pasted strands, not a HYB record.
 func (p *structurePage) engineChanged() {
 	if stCPL(p.engine) {
 		p.ensureEngineModel()
@@ -1063,11 +1092,11 @@ func (p *structurePage) engineChanged() {
 	if p.mode == "paired" && p.engine != engineComrades {
 		p.mode = "genome"
 	}
-	if p.engine == engineCPLcofold && p.src.kind == stSourceRecord {
+	switch {
+	case stGuidedEngine(p.engine):
+		p.setSource(stSourceReference)
+	case p.engine == engineRNAcofold && p.src.kind == stSourceRecord:
 		p.setSource(stSourcePaste)
-	}
-	if p.engine == engineIRIS {
-		p.setSource(stSourceReference) // as the web: IRIS folds a reference region
 	}
 }
 
@@ -1129,24 +1158,21 @@ func (p *structurePage) advanced(c *ui.Context) {
 				})
 				ui.Text(c, "Energy model that ranks candidates when pseudoknots are on. Default "+e.DefaultModel+". Pseudoknot-free folds rank with Turner 2004.").FontSize(FontSmall).TextColor(t.TextMuted)
 			})
-			// sequence-only folds use no reads, so the kernel does not apply
-			if !(p.seqOnly && p.engine == engineCPLfold) {
-				ui.Column(c).Gap(2).Children(func() {
-					ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, "Read support (B_ij)").FontSize(FontSmall).Bold().Width(150)
-						option := stKernels.option(p.supportKernel())
-						label := nameOr(option.displayLabel(), "Choose read support")
-						if ui.Select(c.Key("st-kernel"), &label, stKernels.labels).Grow(1).Label("Read support").Changed() {
-							if i := slices.Index(stKernels.labels, label); i >= 0 {
-								p.kernel = stKernels.Options[i].Value
-							}
+			ui.Column(c).Gap(2).Children(func() {
+				ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "Read support (B_ij)").FontSize(FontSmall).Bold().Width(150)
+					option := stKernels.option(p.supportKernel())
+					label := nameOr(option.displayLabel(), "Choose read support")
+					if ui.Select(c.Key("st-kernel"), &label, stKernels.labels).Grow(1).Label("Read support").Changed() {
+						if i := slices.Index(stKernels.labels, label); i >= 0 {
+							p.kernel = stKernels.Options[i].Value
 						}
-					})
-					ui.Text(c, "Gaussian and both block kernels use log(1 + summed support). RNAduplex allows only between-arm pairs. "+
-						"COMRADES (RNAcofold) also allows each arm to fold internally but counts only between-arm pairs. Both use the "+
-						"raw counts for candidate scores and colours, and 3.6 C / (C + q) kcal/mol for the folding bonus. Default "+stKernelLabel(stKernels.DefaultKernel)+".").FontSize(FontSmall).TextColor(t.TextMuted)
+					}
 				})
-			}
+				ui.Text(c, "Gaussian and both block kernels use log(1 + summed support). RNAduplex allows only between-arm pairs. "+
+					"COMRADES (RNAcofold) also allows each arm to fold internally but counts only between-arm pairs. Both use the "+
+					"raw counts for candidate scores and colours, and 3.6 C / (C + q) kcal/mol for the folding bonus. Default "+stKernelLabel(stKernels.DefaultKernel)+".").FontSize(FontSmall).TextColor(t.TextMuted)
+			})
 			if p.mode == "windows" {
 				foldNumberRow(c, "st-workers", "Windows at once", &p.workers, foldRange{1, 256}, 1,
 					"Windows folded in parallel; each needs its own memory. Default: your CPU budget.")
@@ -1189,23 +1215,30 @@ func (p *structurePage) check(c *ui.Context, pl foldPlan) {
 			}
 			line("Fold", what)
 		}
-		if len(pl.ids) > 0 && p.engine != engineVienna {
-			if p.seqOnly && (p.engine == engineCPLfold || p.engine == engineCPLcofold) {
-				line("Evidence", "none: sequence only")
-			} else {
-				line("Evidence", pl.evidence)
+		if len(pl.ids) > 0 {
+			evidence := pl.evidence
+			if !stGuidedEngine(p.engine) {
+				evidence = "none: sequence only"
 			}
+			line("Evidence", evidence)
+		}
+		mfeTime := func(lengths []int) {
+			line("Time", "about "+FormatDuration(viennaSeconds(lengths))+" (rough: MFE time grows with about the 2.5th power of the length)")
 		}
 		if p.engine == engineVienna && len(pl.lengths) > 0 {
-			line("Engine", fmt.Sprintf("ViennaRNA MFE, %g °C, minimum loop %d", p.temperature, int(p.minLoop)))
-			line("Time", "about "+FormatDuration(viennaSeconds(pl.lengths))+" (rough: MFE time grows with about the 2.5th power of the length)")
+			line("Algorithm", fmt.Sprintf("ViennaRNA MFE, %g °C, minimum loop %d", p.temperature, int(p.minLoop)))
+			mfeTime(pl.lengths)
+		}
+		if p.engine == engineRNAcofold && len(pl.lengths) == 2 {
+			line("Algorithm", fmt.Sprintf("RNAcofold, %g °C, minimum loop %d", p.temperature, int(p.minLoop)))
+			mfeTime([]int{pl.lengths[0] + pl.lengths[1]}) // folded joined
 		}
 		if p.engine == engineComrades && len(pl.lengths) > 0 {
 			lengths := pl.lengths
 			if p.mode == "paired" && len(lengths) == 2 {
 				lengths = []int{lengths[0] + stSpacerNT + lengths[1]} // folded joined
 			}
-			line("Engine", fmt.Sprintf("%s, %g °C, minimum loop %d", p.comradesName(), p.temperature, int(p.minLoop)))
+			line("Algorithm", fmt.Sprintf("%s, %g °C, minimum loop %d", p.comradesName(), p.temperature, int(p.minLoop)))
 			line("Time", "up to about "+FormatDuration(p.comradesSeconds(lengths))+" (one "+p.comradesProgramName()+" fold per stem tried, per order)")
 		}
 		if p.engine == engineIRIS && len(pl.lengths) > 0 {
@@ -1276,8 +1309,8 @@ func (p *structurePage) estimate(pl foldPlan) {
 		// two strands fold as one A+B sequence
 		lengths, workers = []int{pl.lengths[0] + pl.lengths[1]}, 1
 	}
-	// the bonus matrix is part of a guided fold's time
-	job := core.FoldJob{Lengths: lengths, Beam: int(p.beam), Candidates: int(p.phase1), Workers: workers, Pseudoknot: pl.pk, Guided: !p.seqOnly}
+	// the bonus matrix is part of CPLfold's time
+	job := core.FoldJob{Lengths: lengths, Beam: int(p.beam), Candidates: int(p.phase1), Workers: workers, Pseudoknot: pl.pk, Guided: true}
 	key := fmt.Sprint(job)
 	if key == p.estKey {
 		return
@@ -1305,6 +1338,8 @@ func (p *structurePage) runFold() {
 	switch p.engine {
 	case engineVienna:
 		title = "Structure (ViennaRNA) · " + pl.what
+	case engineRNAcofold:
+		title = "Structure (RNAcofold) · " + stRegionsLabel(pl.req.Regions)
 	case engineComrades:
 		title = "Structure (COMRADES) · " + pl.evidence + " · " + pl.what
 	case engineIRIS:
@@ -1312,11 +1347,8 @@ func (p *structurePage) runFold() {
 	case engineCPLcofold:
 		title = "Structure (CPLcofold) · " + pl.evidence + " · " + stRegionsLabel(pl.req.Regions)
 	}
-	if p.seqOnly && (p.engine == engineCPLfold || p.engine == engineCPLcofold) {
-		title = strings.Replace(title, pl.evidence, "sequence only", 1)
-	}
 	if pl.source != "" {
-		title = stSourceTitle(p.engine, pl.source, p.seqOnly)
+		title = stSourceTitle(p.engine, pl.source)
 	}
 	a.StartTask(pl.req, title, func(t model.Task, err error) {
 		p.starting = false
@@ -1330,16 +1362,12 @@ func (p *structurePage) runFold() {
 	})
 }
 
-// stSourceTitle is the task title of a pasted or HYB record sequence:
-// "Structure (ViennaRNA) · pasted sequence, 90 nt".
-func stSourceTitle(engine, source string, seqOnly bool) string {
-	title := map[string]string{engineVienna: "Structure (ViennaRNA)", engineComrades: "Structure (COMRADES)",
-		engineCPLcofold: "Structure (CPLcofold)"}[engine]
-	title = nameOr(title, "Structure") + " · " + source
-	if seqOnly && (engine == engineCPLfold || engine == engineCPLcofold) {
-		title += " · sequence only"
-	}
-	return title
+// stSourceTitle is the task title of a pasted or HYB record sequence,
+// folded from the sequence alone: "Structure (ViennaRNA) · pasted
+// sequence, 90 nt".
+func stSourceTitle(engine, source string) string {
+	title := map[string]string{engineVienna: "Structure (ViennaRNA)", engineRNAcofold: "Structure (RNAcofold)"}[engine]
+	return nameOr(title, "Structure") + " · " + source
 }
 
 // running: this page's fold is starting, queued or running.
@@ -1654,14 +1682,17 @@ func (p *structurePage) list(c *ui.Context) {
 					ui.Text(c, s).FontSize(FontSmall)
 				}
 				meta := "Evidence: " + nameOr(p.evidenceNames(e), "—") + " · " + FormatTime(e.CreatedAt)
+				alone := e.Parameters["engine"] == "ViennaRNA" || e.Parameters["engine"] == "RNAcofold"
 				switch {
-				case stEntrySource(e) != "" && (e.Parameters["engine"] == "ViennaRNA" || e.Parameters["evidence"] == "none"):
+				case stEntrySource(e) != "" && (alone || e.Parameters["evidence"] == "none"):
 					// a pasted or record sequence folded alone: the samples gave nothing
 					engine, _ := e.Parameters["engine"].(string)
 					meta = nameOr(engine, "CPLfold") + " · sequence only · " + FormatTime(e.CreatedAt)
 				case e.Parameters["engine"] == "ViennaRNA":
 					meta = "ViennaRNA MFE · reference of " + nameOr(p.evidenceNames(e), "—") + " · " + FormatTime(e.CreatedAt)
-				case e.Parameters["evidence"] == "none":
+				case e.Parameters["engine"] == "RNAcofold":
+					meta = "RNAcofold · reference of " + nameOr(p.evidenceNames(e), "—") + " · " + FormatTime(e.CreatedAt)
+				case e.Parameters["evidence"] == "none": // an earlier sequence-only CPLfold or CPLcofold
 					engine, _ := e.Parameters["engine"].(string)
 					meta = nameOr(engine, "CPLfold") + " · sequence only · reference of " +
 						nameOr(p.evidenceNames(e), "—") + " · " + FormatTime(e.CreatedAt)

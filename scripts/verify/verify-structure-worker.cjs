@@ -194,6 +194,46 @@ async function verifyCatalogDefaults(hasEngine) {
   }
 }
 
+// Sequence only, two regions: the "cofold" request folds strands A and B as
+// `RNAcofold --noconv --noPS` does. The structure and energies expected are
+// that command's output (ViennaRNA 2.7.2) for these strands at 37 and 25 °C.
+async function verifyRnacofold(worker) {
+  const sequenceA = "GGGAGACUUCGGUCUCCAAUGCCAGUAC", sequenceB = "GUACUGGCAUUGGAAAGGCUUCGGCCUUUC";
+  const expected = ".((((((....))))))(((((((((((&))))))))))).(((((((....)))))))";
+  for (const [temperature, energy] of [[37, "-36.30"], [25, "-45.28"], [undefined, "-36.30"]]) {
+    const request = { type: "cofold", sequenceA, sequenceB };
+    if (temperature !== undefined) Object.assign(request, { temperature, minimumLoop: 3 }); // else the catalog defaults
+    const reply = await waitForTerminal(worker, [], request);
+    assert.equal(reply.type, "complete", reply.message);
+    const result = reply.result;
+    assert.deepEqual([result.engine, result.algorithm, result.engineVersion], ["ViennaRNA", "RNAcofold", "2.7.2"]);
+    assert.equal(result.dotBracketWithBreak, expected);
+    assert.equal(result.dotBracket, expected.replace("&", ""));
+    assert.equal(result.energy.toFixed(2), energy);
+    assert.deepEqual([result.sequence, result.displaySequence, result.cutpoint, result.strandLengths],
+      [sequenceA + sequenceB, sequenceA + "&" + sequenceB, 28, [28, 30]]);
+    assert.deepEqual([result.temperature, result.minimumLoop, result.constraintMode, result.constraintCount], [temperature ?? 37, 3, "none", 0]);
+    // 11 pairs join the strands; a hairpin closes within each
+    assert.deepEqual([result.pairs.length, result.intermolecularPairs, result.unpaired], [24, 11, 10]);
+    for (const pair of result.pairs) {
+      const strand = position => position <= 28 ? ["A", position] : ["B", position - 28];
+      assert.deepEqual([pair.leftStrand, pair.leftStrandPosition], strand(pair.left));
+      assert.deepEqual([pair.rightStrand, pair.rightStrandPosition], strand(pair.right));
+      assert.equal(pair.intermolecular, pair.left <= 28 && pair.right > 28);
+      assert.equal(pair.leftBase + pair.rightBase, result.sequence[pair.left - 1] + result.sequence[pair.right - 1]);
+    }
+  }
+  for (const [request, issue] of [[{ sequenceA: "", sequenceB }, /two non-empty RNA strands/],
+    [{ sequenceA, sequenceB: "GGN" }, /RNA B contains unsupported symbols: N/],
+    [{ sequenceA: "G".repeat(1500), sequenceB: "C".repeat(1501) }, /up to 3000 nt in both strands/],
+    [{ sequenceA, sequenceB, temperature: 200 }, /Folding temperature/]]) {
+    const reply = await waitForTerminal(worker, [], { type: "cofold", ...request });
+    assert.equal(reply.type, "error");
+    assert.match(reply.message, issue);
+  }
+  process.stdout.write("structure-worker-rnacofold: ok\n");
+}
+
 async function main() {
   verifyCofoldAllocationCleanup();
   await verifyFoldAlphabet();
@@ -276,6 +316,8 @@ async function main() {
     });
     assert.equal(crossingMessage.type, "error");
     assert.match(crossingMessage.message, /must not cross/);
+
+    await verifyRnacofold(worker);
 
     const comradesMessage = await waitForTerminal(worker, messages, {
       type: "comrades-fold",

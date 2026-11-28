@@ -1,7 +1,8 @@
 """ViennaRNA MFE folds for the structure task (``engine: "viennarna"``), as
 the web RNA Structure page's ViennaRNA mode (web/vendor/viennarna/
 hyb2_vienna_fold.c): Turner 2004 parameters, a temperature and minimum
-hairpin loop, and optional hard base pairs enforced in every loop context.
+hairpin loop, and optional hard base pairs enforced in every loop context;
+two regions (``mode: "cofold"``) are folded as two strands with RNAcofold.
 """
 from __future__ import annotations
 
@@ -119,6 +120,34 @@ def fold(sequence: str, params: Dict[str, Any], hard_pairs: Sequence[Tuple[int, 
         "type": "constrained MFE" if hard_pairs else "MFE",
         "pairs": [(i, j, "()", None) for i, j in pairs],  # plain MFE: no HYB evidence (bonus None)
         "hard_pairs": [list(p) for p in hard_pairs],
+        "evidence": {},
+        "seconds": {"bonus": 0.0, "fold": round(time.monotonic() - started, 2)},
+    }
+
+
+def cofold(one: str, two: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """RNAcofold of two strands from their sequences alone (RNAcofold
+    --noconv: the dimer's MFE, duplex initiation included; the web's
+    hyb2_vienna_cofold); a record over one+two, its structure without the "&"."""
+    one, two = checked_fold_text(one), checked_fold_text(two)
+    if not one or not two:
+        raise ValueError("RNAcofold needs two sequences")
+    import RNA  # the bundled ViennaRNA
+
+    started = time.monotonic()
+    md = RNA.md()
+    md.temperature = params["temperature"]
+    md.min_loop_size = params["min_loop"]
+    fc = RNA.fold_compound(one + "&" + two, md, RNA.OPTION_MFE | RNA.OPTION_HYBRID)
+    structure, energy = fc.mfe_dimer()
+    structure = structure.replace("&", "")
+    if not math.isfinite(energy) or len(structure) != len(one) + len(two):
+        raise ValueError("ViennaRNA RNAcofold returned an invalid two-strand structure.")
+    return {
+        "structure": structure,
+        "energy": round(float(energy), 2),
+        "type": "MFE",
+        "pairs": [(i, j, "()", None) for i, j in _pairs(structure)],  # no HYB evidence (bonus None)
         "evidence": {},
         "seconds": {"bonus": 0.0, "fold": round(time.monotonic() - started, 2)},
     }

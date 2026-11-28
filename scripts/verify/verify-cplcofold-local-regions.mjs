@@ -63,14 +63,16 @@ async function dispatch(payload, target = null) {
 
 class BrowserWorkerTransport {
   constructor(url) {
-    assert.match(url, /cplfold\.worker\.mjs/);
+    assert.match(url, /cplfold\.worker\.mjs|structure\.worker\.js/);
     this.url = url;
     this.terminated = false;
     workers.push(this);
   }
   postMessage(message) {
     this.message = plain(message);
-    this.pending = dispatch(this.message, this);
+    // A sequence-only fold's ViennaRNA request is recorded, not folded:
+    // verify-structure-worker.cjs runs that worker.
+    this.pending = /cplfold\.worker\.mjs/.test(this.url) ? dispatch(this.message, this) : Promise.resolve();
   }
   terminate() { this.terminated = true; }
 }
@@ -203,6 +205,10 @@ function expectedUpperBonus(arms) {
   return expected;
 }
 
+// The length policy of each sequence source and layout. A sequence-only fold
+// is ViennaRNA MFE for one region and RNAcofold for two (analysis-data.js
+// structureSteps): this form, saved before the three setup steps as
+// sequence-only CPLfold, folds so.
 function policyFixture(source, length, overrides = {}) {
   const mapping = {A: "A", B: "B"};
   const fasta = {mapping, sequences: [{id: "A", sequence: "g\u0085".repeat(length)}, {id: "B", sequence: "c".repeat(length)}]};
@@ -231,14 +237,14 @@ async function checkPolicy(name, state, sequence, issue) {
   assert.equal(info.error, "", name);
   assert.equal(info.sequence, sequence, name);
   assert.equal(controller.predict(state, api), true, name + ": " + api.toasts.at(-1));
-  await state.structureWorker.pending;
-  assert.equal(state.structure.status, "complete", state.structure.message);
-  const result = state.structure.result;
-  assert.equal(result.sequence, sequence);
-  assert.equal(result.dotBracket.length, sequence.length);
-  assert.equal(result.cutpoint ?? null, info.cutpoint ?? null);
-  console.log(JSON.stringify({case: name, accepted: true, sequence: result.sequence, cutpoint: result.cutpoint ?? null,
-    dotBracket: result.dotBracketWithBreak || result.dotBracket, energy: result.energy}));
+  // ViennaRNA's request: one sequence ("fold"), or strands A and B ("cofold")
+  const request = state.structureWorker.message;
+  assert.match(state.structureWorker.url, /structure\.worker\.js/, name);
+  assert.deepEqual(request.type === "cofold" ? [request.sequenceA, request.sequenceB] : [request.sequence],
+    info.cutpoint ? [sequence.slice(0, info.cutpoint), sequence.slice(info.cutpoint)] : [sequence], name);
+  assert.equal(request.type, info.cutpoint ? "cofold" : "fold", name);
+  controller.cancel(state);
+  console.log(JSON.stringify({case: name, accepted: true, request: request.type, sequence, cutpoint: info.cutpoint ?? null}));
 }
 
 try {
@@ -295,14 +301,16 @@ try {
 
   // Both selected windows are valid even though their reference flanks and
   // the 5,000-nt gap contain unknown symbols. Those symbols keep their indices.
-  const sameNoPk = await runController(fixture(true, false));
+  // (alpha 0: the HYB rows do not change this fold.)
+  const sameNoPk = await runController(fixture(true, true));
   assert.ok(Math.abs(sameNoPk.energy + 5.8) < 1e-9);
   assert.equal(sameNoPk.dotBracketWithBreak, "((((&))))");
   assert.ok(sameNoPk.candidates.every(c => c.type === "phase1" && c.crossingPairs === 0));
 
-  // Invalid bases *inside* either window fail before starting a worker.
-  for (const same of [true, false]) for (const strand of [0, 1]) {
-    const invalid = fixture(same, false);
+  // Invalid bases *inside* either window fail before starting a worker, for
+  // CPLcofold (guided) and RNAcofold (sequence only).
+  for (const same of [true, false]) for (const strand of [0, 1]) for (const guided of [true, false]) {
+    const invalid = fixture(same, guided);
     const selected = assertSelection(invalid).sourceSegments[strand];
     const entry = invalid.view.structureEvidence.fasta.sequences.find(s => s.id === selected.referenceId);
     const index = selected.referenceStart;

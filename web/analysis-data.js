@@ -410,6 +410,110 @@
     };
   }
 
+  // RNA Structure is set up in three steps: Evidence ("guided" by the HYB
+  // chimeras, or the "sequence" only), Regions ("one", or "two": on one
+  // RNA, on two RNAs or the same region twice) and the Algorithm those two
+  // offer, listed here default first. The steps are read from the form's
+  // fields, which the workers, results and exports keep using:
+  //   cplfold    engine "cplfold", cplfoldMode "single", cplfoldEvidence "hyb-blocks"
+  //   cplcofold  engine "cplfold", cplfoldMode "cofold", cplfoldEvidence "hyb-blocks"
+  //   comrades   engine "viennarna", constraintMode "hyb-guided" (two regions: the 100-nt spacer layout)
+  //   iris       engine "iris" (one reference region)
+  //   vienna     engine "viennarna", constraintMode "none" or "manual-hard-base-pairs" (ViennaRNA MFE)
+  //   rnacofold  engine "viennarna", constraintMode "none", two regions as two strands
+  // Two regions are evidenceLayout "paired" and cplfoldMode "cofold" for
+  // every algorithm, so the regions carry over when the algorithm changes.
+  const STRUCTURE_ALGORITHMS = Object.freeze({
+    guided: Object.freeze({ one: Object.freeze(["cplfold", "comrades", "iris"]), two: Object.freeze(["cplcofold", "comrades"]) }),
+    sequence: Object.freeze({ one: Object.freeze(["vienna"]), two: Object.freeze(["rnacofold"]) })
+  });
+
+  function structureAlgorithms(evidence, regions) {
+    return STRUCTURE_ALGORITHMS[evidence === "sequence" ? "sequence" : "guided"][regions === "two" ? "two" : "one"].slice();
+  }
+
+  // The steps of a form. A form saved before the steps may hold
+  // sequence-only CPLfold or CPLcofold, which are no longer offered: it
+  // reads as ViennaRNA MFE or RNAcofold. A HYB record is one strand and
+  // manual hard pairs are a ViennaRNA MFE option, so both fold one region.
+  function structureSteps(structure) {
+    const form = structure || {};
+    if (form.engine === "iris") {
+      return { evidence: "guided", regions: "one", algorithm: "iris" };
+    }
+    const cplfold = form.engine === "cplfold";
+    // A plain ViennaRNA form folded region 1 alone before RNAcofold, whatever
+    // evidenceLayout a COMRADES layout left: two strands need both fields.
+    const two = cplfold ? form.cplfoldMode === "cofold"
+      : form.constraintMode === "hyb-guided" ? form.evidenceLayout === "paired"
+      : form.evidenceLayout === "paired" && form.cplfoldMode === "cofold";
+    if (cplfold && form.cplfoldEvidence !== "none") {
+      return { evidence: "guided", regions: two ? "two" : "one", algorithm: two ? "cplcofold" : "cplfold" };
+    }
+    if (!cplfold && form.constraintMode === "hyb-guided") {
+      return { evidence: "guided", regions: two ? "two" : "one", algorithm: "comrades" };
+    }
+    const one = !two || form.source === "record" || (!cplfold && form.constraintMode === "manual-hard-base-pairs");
+    return { evidence: "sequence", regions: one ? "one" : "two", algorithm: one ? "vienna" : "rnacofold" };
+  }
+
+  // Writes the steps to the form's fields. A guided fold reads a reference
+  // region; two sequence-only regions take two pasted strands, not a record.
+  function writeStructureSteps(structure, steps) {
+    const two = steps.regions === "two";
+    // ViennaRNA MFE keeps manual hard pairs set on a ViennaRNA form
+    const manual = steps.algorithm === "vienna" && structure.constraintMode === "manual-hard-base-pairs" &&
+      structure.engine !== "cplfold" && structure.engine !== "iris";
+    structure.evidenceLayout = two ? "paired" : "single";
+    structure.cplfoldMode = two ? "cofold" : "single";
+    // CPLfold and CPLcofold are always guided by the HYB chimeras
+    structure.cplfoldEvidence = "hyb-blocks";
+    structure.engine = steps.algorithm === "cplfold" || steps.algorithm === "cplcofold" ? "cplfold"
+      : steps.algorithm === "iris" ? "iris" : "viennarna";
+    structure.constraintMode = steps.algorithm === "comrades" ? "hyb-guided" : manual ? "manual-hard-base-pairs" : "none";
+    if (steps.evidence === "guided") {
+      structure.source = "reference";
+    } else if (two && structure.source === "record") {
+      structure.source = "paste";
+    }
+  }
+
+  // Sets one or more steps ({ evidence, regions, algorithm }). The
+  // algorithm is kept while the new steps still offer it, else it becomes
+  // their default. Returns the steps now set.
+  function setStructureSteps(structure, change) {
+    const steps = Object.assign(structureSteps(structure), change || {});
+    steps.evidence = steps.evidence === "sequence" ? "sequence" : "guided";
+    steps.regions = steps.regions === "two" ? "two" : "one";
+    const offered = structureAlgorithms(steps.evidence, steps.regions);
+    if (offered.indexOf(steps.algorithm) === -1) {
+      steps.algorithm = offered[0];
+    }
+    writeStructureSteps(structure, steps);
+    if (structure.engine === "cplfold") {
+      // CPLfold and CPLcofold list different energy models
+      const catalog = globalThis.Hyb2EngineParameters[structure.cplfoldMode === "cofold" ? "cplcofold" : "cplfold"];
+      if (!catalog.models.some(function (option) { return option.value === structure.cplfoldEnergyModel; })) {
+        structure.cplfoldEnergyModel = catalog.defaultModel;
+      }
+    }
+    return steps;
+  }
+
+  // Puts a form in the state its steps read back, so that a form saved or
+  // set before the steps never opens invalid (see structureSteps). The
+  // CPLfold energy model is left alone: an unsupported model is reported
+  // when folding, not replaced. Returns true when a field changed.
+  function normaliseStructureSetup(structure) {
+    if (!structure) {
+      return false;
+    }
+    const keys = ["engine", "cplfoldMode", "cplfoldEvidence", "constraintMode", "evidenceLayout", "source"];
+    const before = keys.map(function (key) { return structure[key]; }).join("|");
+    writeStructureSteps(structure, structureSteps(structure));
+    return keys.map(function (key) { return structure[key]; }).join("|") !== before;
+  }
+
   // Extent of an RNA's arms. When no records are supplied (pages fed by a
   // DataProvider), the summary's rnaExtents map is used instead.
   // The partner window of a region for a two-region fold: the window of
@@ -3116,6 +3220,10 @@
     defaultViewpointState: defaultViewpointState,
     defaultComparisonState: defaultComparisonState,
     defaultStructureState: defaultStructureState,
+    structureAlgorithms: structureAlgorithms,
+    structureSteps: structureSteps,
+    setStructureSteps: setStructureSteps,
+    normaliseStructureSetup: normaliseStructureSetup,
     getRnaExtent: getRnaExtent,
     partnerWindow: partnerWindow,
     safeFileName: safeFileName,

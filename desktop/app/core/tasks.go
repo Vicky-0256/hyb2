@@ -1524,7 +1524,8 @@ func structurePayload(request TaskStartRequest, project, id, runDir string, clai
 	if request.Engine != nil {
 		engine = *request.Engine
 	}
-	// cofold (CPLcofold) and paired (COMRADES) fold two regions
+	// cofold (CPLcofold, or RNAcofold with engine viennarna) and paired
+	// (COMRADES) fold two regions
 	twoRegions := mode == "cofold" || mode == "paired"
 	switch {
 	case mode == "genome" && len(windows) > 0:
@@ -1533,8 +1534,10 @@ func structurePayload(request TaskStartRequest, project, id, runDir string, clai
 		return nil, errors.New("structure windows mode needs at least one window")
 	case mode != "genome" && mode != "windows" && !twoRegions:
 		return nil, errors.New("structure mode must be genome, windows, cofold or paired")
-	case (mode == "cofold") != (engine == "cplcofold"):
-		return nil, errors.New("structure mode cofold goes with engine cplcofold")
+	case engine == "cplcofold" && mode != "cofold":
+		return nil, errors.New("structure engine cplcofold goes with mode cofold")
+	case mode == "cofold" && engine != "cplcofold" && engine != "viennarna":
+		return nil, errors.New("structure mode cofold goes with engine cplcofold, or viennarna (RNAcofold)")
 	case mode == "paired" && engine != "comrades":
 		return nil, errors.New("structure mode paired goes with engine comrades")
 	case twoRegions && (len(windows) > 0 || len(request.Regions) != 2) && request.Sequence == nil:
@@ -1599,7 +1602,8 @@ func structurePayload(request TaskStartRequest, project, id, runDir string, clai
 }
 
 // structureSequence checks and copies a pasted or HYB record sequence: one
-// strand folded whole (genome mode), or two strands with CPLcofold.
+// strand folded whole (genome mode), or two strands (cofold mode: CPLcofold
+// or RNAcofold).
 func structureSequence(request TaskStartRequest, mode string, windows []Window, payload Obj) error {
 	source := "reference"
 	if request.Source != nil {

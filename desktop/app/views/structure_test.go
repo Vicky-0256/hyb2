@@ -340,8 +340,8 @@ func TestStructureOneRegionPresetKeepsWindowOrder(t *testing.T) {
 	mustClick(t, tt, "Regions (windows)")
 	mustClick(t, tt, "Windows")
 	tt.Type("30-1")
-	mustClick(t, tt, "Custom engine and reference layout")
-	mustClick(t, tt, "One local region · CPLfold")
+	mustClick(t, tt, "Custom")
+	mustClick(t, tt, "Short-range · one region · CPLfold")
 	tt.Frame()
 	if p.windows != "30-1" || !tt.HasText("• 30-1: start must not exceed end.") {
 		t.Fatalf("one-region preset changed the input or cleared its precheck: %q, %v", p.windows, p.plan().problems)
@@ -379,10 +379,9 @@ func TestStructureTwoRegionInputForm(t *testing.T) {
 					}
 					a, f, tt, p := stSetupPage(t, 2200)
 					if engine == engineCPLcofold {
-						mustClick(t, tt, "CPLcofold, two regions as two strands (one RNA or two RNAs)")
+						stPick(t, tt, engineCPLcofold, true)
 					} else {
-						mustClick(t, tt, "COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras")
-						mustClick(t, tt, "Two regions joined by a 100-nt spacer (long-range, intermolecular or homodimer)")
+						stPick(t, tt, engineComrades, true)
 					}
 					mustClick(t, tt, "Region 1")
 					tt.Type(tc.first)
@@ -429,81 +428,70 @@ func TestStructureTwoRegionInputForm(t *testing.T) {
 }
 
 func TestStructureTwoRegionPresetKeepsOrder(t *testing.T) {
-	for _, engine := range []string{engineCPLcofold, engineComrades} {
-		for _, preset := range []string{stWorkflowLong, stWorkflowInter, stWorkflowHomodimer, stWorkflowShort} {
-			t.Run(engine+"/"+preset, func(t *testing.T) {
-				a, f, tt, p := stSetupPage(t, 2200)
-				if preset == stWorkflowInter {
-					ref := p.geneReference()
-					ref.RNASequences = append(slices.Clone(ref.RNAs()), model.Sequence{Name: "partner", Length: 100})
-					tt.Frame()
-				}
-				cpl := engine == engineCPLcofold
-				if !cpl {
-					mustClick(t, tt, "COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras")
-				}
-				mustClick(t, tt, "Regions (windows)")
-				mustClick(t, tt, "Windows")
-				tt.Type("30-1")
-				mustClick(t, tt, "Custom engine and reference layout")
-				longLabel := stWorkflowLabels(cpl)[slices.Index(stWorkflows, stWorkflowLong)]
-				mustClick(t, tt, longLabel)
-				mustClick(t, tt, "Region 2")
-				tt.Type("41-70")
-				if preset != stWorkflowLong {
-					mustClick(t, tt, longLabel)
-					mustClick(t, tt, stWorkflowLabels(cpl)[slices.Index(stWorkflows, preset)])
-				}
+	for _, preset := range []string{stWorkflowLong, stWorkflowInter, stWorkflowHomodimer, stWorkflowShort} {
+		t.Run(preset, func(t *testing.T) {
+			a, f, tt, p := stSetupPage(t, 2200)
+			if preset == stWorkflowInter {
+				ref := p.geneReference()
+				ref.RNASequences = append(slices.Clone(ref.RNAs()), model.Sequence{Name: "partner", Length: 100})
 				tt.Frame()
-				if p.region1 != "30-1" || !tt.HasText("30-1: start must not exceed end.") ||
-					(preset == stWorkflowHomodimer && p.region2 != "30-1") || (preset == stWorkflowShort && p.windows != "30-1") {
-					t.Errorf("preset changed or accepted reversed coordinates: first=%q second=%q windows=%q problems=%v", p.region1, p.region2, p.windows, p.plan().problems)
-				}
-				mustClick(t, tt, "Run fold")
-				csSettle(a, tt)
-				if started := f.startedKinds(); len(started) != 0 {
-					t.Fatalf("preset submitted invalid coordinates: regions=%+v windows=%+v", started[0].Regions, started[0].Windows)
-				}
-				t.Logf("preset=%s; region1=%q region2=%q windows=%q; StartTask calls=0", preset, p.region1, p.region2, p.windows)
+			}
+			mustClick(t, tt, "Regions (windows)")
+			mustClick(t, tt, "Windows")
+			tt.Type("30-1")
+			mustClick(t, tt, "Custom")
+			longLabel := stWorkflowLabels[slices.Index(stWorkflows, stWorkflowLong)]
+			mustClick(t, tt, longLabel)
+			mustClick(t, tt, "Region 2")
+			tt.Type("41-70")
+			if preset != stWorkflowLong {
+				mustClick(t, tt, longLabel)
+				mustClick(t, tt, stWorkflowLabels[slices.Index(stWorkflows, preset)])
+			}
+			tt.Frame()
+			if p.region1 != "30-1" || !tt.HasText("30-1: start must not exceed end.") ||
+				(preset == stWorkflowHomodimer && p.region2 != "30-1") || (preset == stWorkflowShort && p.windows != "30-1") {
+				t.Errorf("preset changed or accepted reversed coordinates: first=%q second=%q windows=%q problems=%v", p.region1, p.region2, p.windows, p.plan().problems)
+			}
+			mustClick(t, tt, "Run fold")
+			csSettle(a, tt)
+			if started := f.startedKinds(); len(started) != 0 {
+				t.Fatalf("preset submitted invalid coordinates: regions=%+v windows=%+v", started[0].Regions, started[0].Windows)
+			}
+			t.Logf("preset=%s; region1=%q region2=%q windows=%q; StartTask calls=0", preset, p.region1, p.region2, p.windows)
 
-				// Correcting the field must unblock this same form and preserve the coordinates.
-				field := "Region 1"
-				if preset == stWorkflowShort {
-					field = "Windows"
+			// Correcting the field must unblock this same form and preserve the coordinates.
+			field := "Region 1"
+			if preset == stWorkflowShort {
+				field = "Windows"
+			}
+			mustClick(t, tt, field)
+			tt.TypeKey(ui.Cmd, ui.KeyA, "")
+			tt.Type("5-34")
+			mustClick(t, tt, "Run fold")
+			csSettle(a, tt)
+			started := f.startedKinds()
+			if len(started) != 1 {
+				t.Fatalf("corrected preset did not submit: %v", p.plan().problems)
+			}
+			if preset == stWorkflowShort {
+				if !slices.Equal(started[0].Windows, []core.Window{{Start: 5, End: 34}}) || len(started[0].Regions) != 0 {
+					t.Fatalf("single-region preset changed the corrected window: %+v", started[0])
 				}
-				mustClick(t, tt, field)
-				tt.TypeKey(ui.Cmd, ui.KeyA, "")
-				tt.Type("5-34")
-				if preset == stWorkflowHomodimer && !cpl {
-					// COMRADES copies on preset selection; only CPLcofold mirrors later edits.
-					mustClick(t, tt, "Region 2")
-					tt.TypeKey(ui.Cmd, ui.KeyA, "")
-					tt.Type("5-34")
+			} else {
+				second := core.Region{GeneID: africaGene, Start: 41, End: 70}
+				if preset == stWorkflowInter {
+					second.GeneID = "partner"
+				} else if preset == stWorkflowHomodimer {
+					second.Start, second.End = 5, 34 // CPLcofold's homodimer mirrors region 1
 				}
-				mustClick(t, tt, "Run fold")
-				csSettle(a, tt)
-				started := f.startedKinds()
-				if len(started) != 1 {
-					t.Fatalf("corrected preset did not submit: %v", p.plan().problems)
+				if !slices.Equal(started[0].Regions, []core.Region{{GeneID: africaGene, Start: 5, End: 34}, second}) ||
+					*started[0].Engine != engineCPLcofold {
+					t.Fatalf("two-region preset changed the corrected regions: %+v", started[0].Regions)
 				}
-				if preset == stWorkflowShort {
-					if !slices.Equal(started[0].Windows, []core.Window{{Start: 5, End: 34}}) || len(started[0].Regions) != 0 {
-						t.Fatalf("single-region preset changed the corrected window: %+v", started[0])
-					}
-				} else {
-					second := core.Region{GeneID: africaGene, Start: 41, End: 70}
-					if preset == stWorkflowInter {
-						second.GeneID = "partner"
-					} else if preset == stWorkflowHomodimer {
-						second.Start, second.End = 5, 34
-					}
-					if !slices.Equal(started[0].Regions, []core.Region{{GeneID: africaGene, Start: 5, End: 34}, second}) {
-						t.Fatalf("two-region preset changed the corrected regions: %+v", started[0].Regions)
-					}
-				}
-				t.Logf("corrected preset=%s; submitted regions=%+v, windows=%+v", preset, started[0].Regions, started[0].Windows)
-			})
-		}
+			}
+			t.Logf("corrected preset=%s; submitted regions=%+v, windows=%+v", preset, started[0].Regions, started[0].Windows)
+		})
 	}
 }
 
@@ -527,9 +515,9 @@ func TestStructureWholeReferenceMinimumForm(t *testing.T) {
 					csSettle(a, tt)
 					p := a.PageFor("structure").(*structurePage)
 					if engine == engineVienna {
-						mustClick(t, tt, "ViennaRNA MFE, the sequence alone (optional hard pairs)")
+						stPick(t, tt, engineVienna, false)
 					} else if engine == engineComrades {
-						mustClick(t, tt, "COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras")
+						stPick(t, tt, engineComrades, false)
 					}
 					mustClick(t, tt, "Run fold")
 					csSettle(a, tt)
@@ -567,10 +555,9 @@ func TestStructureTwoRegionReferenceLengths(t *testing.T) {
 				ref.RNASequences = append(ref.RNASequences, model.Sequence{Name: "short-partner", Length: lengths[1]})
 				tt.Frame()
 				if engine == engineCPLcofold {
-					mustClick(t, tt, "CPLcofold, two regions as two strands (one RNA or two RNAs)")
+					stPick(t, tt, engineCPLcofold, true)
 				} else {
-					mustClick(t, tt, "COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras")
-					mustClick(t, tt, "Two regions joined by a 100-nt spacer (long-range, intermolecular or homodimer)")
+					stPick(t, tt, engineComrades, true)
 				}
 				mustClick(t, tt, "Region 1")
 				tt.Type(fmt.Sprintf("1-%d", max(lengths[0], 30)))
@@ -724,11 +711,9 @@ func TestStructureViennaForm(t *testing.T) {
 	if p.engine != engineCPLfold || p.temperature != 37 || p.minLoop != 3 {
 		t.Fatalf("defaults %q %v %v", p.engine, p.temperature, p.minLoop)
 	}
-	if err := tt.Click("ViennaRNA MFE, the sequence alone (optional hard pairs)"); err != nil {
-		t.Fatal(err)
-	}
+	stPick(t, tt, engineVienna, false)
 	tt.Frame()
-	for _, text := range []string{"ViennaRNA settings", "37 °C · minimum loop 3 · defaults", "Engine", "ViennaRNA MFE, 37 °C, minimum loop 3",
+	for _, text := range []string{"ViennaRNA settings", "37 °C · minimum loop 3 · defaults", "Algorithm", "ViennaRNA MFE, 37 °C, minimum loop 3",
 		"• ViennaRNA MFE folds the sequence alone: the chimeric reads are not used, the samples only give the reference."} {
 		if !tt.HasText(text) {
 			t.Fatalf("lacks %q: %q", text, tt.Texts())
@@ -777,9 +762,7 @@ func TestStructureComradesForm(t *testing.T) {
 	a.Navigate("structure", nil)
 	csSettle(a, tt)
 	p := a.PageFor("structure").(*structurePage)
-	if err := tt.Click("COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras"); err != nil {
-		t.Fatal(err)
-	}
+	stPick(t, tt, engineComrades, false)
 	p.advancedOpen = true
 	tt.Frame()
 	for _, text := range []string{"Ranked stem constraints", "Strongest RNAcofold stems tried as hard pairs, 1 to 75. Default 75.", "Randomised folds", "Seed", "Evidence", "SUB · 2 datasets merged",
@@ -836,7 +819,7 @@ func TestViennaEstimateNearMeasured(t *testing.T) {
 // form, with the chimeras or the sequence alone.
 func TestStructureCofoldForm(t *testing.T) {
 	a, f := openCS(t)
-	tt := ui.NewTester(a.View, 1100, 900)
+	tt := ui.NewTester(a.View, 1100, 1400)
 	a.Navigate("structure", map[string]any{"prefill": map[string]any{
 		"regions":      []core.Region{{GeneID: africaGene, Start: 1, End: 45}, {GeneID: africaGene, Start: 1086, End: 1134}},
 		"selectionKey": "c:SUB", "source": "the contact map"}})
@@ -845,7 +828,8 @@ func TestStructureCofoldForm(t *testing.T) {
 	if p.engine != engineCPLcofold || p.region1 != "1-45" || p.region2 != "1086-1134" || p.gene2 != africaGene {
 		t.Fatalf("prefill %q %q %q %q", p.engine, p.region1, p.region2, p.gene2)
 	}
-	for _, text := range []string{"1  Region 1 (strand A)", "3  Region 2 (strand B)", "2 regions as two strands, 45 + 49 nt",
+	for _, text := range []string{"2  Regions", "CPLcofold · Hyb2", "COMRADES · for comparison", "Region 1 (strand A)", "Region 2 (strand B)",
+		"2 regions as two strands, 45 + 49 nt",
 		"• Chimeras with one arm in each region join the strands; chimeras with both arms in one region are evidence within it."} {
 		if !tt.HasText(text) {
 			t.Fatalf("lacks %q: %q", text, tt.Texts())
@@ -867,10 +851,21 @@ func TestStructureCofoldForm(t *testing.T) {
 		params["allow_pseudoknot"] != false || *req.Workers != 1 {
 		t.Fatalf("request %+v params %+v", req, params)
 	}
-	// sequence only; the energy model and beam CPLcofold supports
-	p.seqOnly = true
-	if pl := p.plan(); pl.req.Parameters.(map[string]any)["evidence"] != "none" || len(pl.problems) != 0 {
-		t.Fatalf("sequence only %+v %q", pl.req.Parameters, pl.problems)
+	// sequence only: RNAcofold of the same two regions, ViennaRNA's settings
+	mustClick(t, tt, "Sequence only")
+	tt.Frame()
+	if pl := p.plan(); p.engine != engineRNAcofold || *pl.req.Engine != "viennarna" || *pl.req.Mode != "cofold" ||
+		pl.req.Regions[1] != req.Regions[1] || len(pl.problems) != 0 || !tt.HasText("RNAcofold") || tt.HasText("CPLcofold · Hyb2") {
+		t.Fatalf("RNAcofold %+v %+v %q", pl.req, pl.req.Parameters, pl.problems)
+	}
+	if got, _ := json.Marshal(p.plan().req.Parameters); string(got) != `{"min_loop":3,"temperature":37}` {
+		t.Fatalf("RNAcofold parameters %s", got)
+	}
+	// guided again: CPLcofold, the energy model and beam it supports
+	mustClick(t, tt, "Guided by HYB chimeras")
+	tt.Frame()
+	if p.engine != engineCPLcofold {
+		t.Fatalf("guided two regions: %q", p.engine)
 	}
 	p.model, p.beam = "CC06", 500
 	if pl := p.plan(); len(pl.problems) != 2 {
@@ -889,10 +884,14 @@ func TestStructureCofoldForm(t *testing.T) {
 		t.Fatalf("a five-base independent fragment is valid: %+v %q", pl.req.Regions, pl.problems)
 	}
 	// COMRADES(ViennaRNA) of the same two regions joined by the web's spacer
-	p.region2, p.seqOnly, p.engine, p.mode = "1086-1134", false, engineComrades, "paired"
+	p.region2 = "1086-1134"
 	tt.Frame()
-	for _, text := range []string{"Two regions joined by a 100-nt spacer (long-range, intermolecular or homodimer)",
-		"Region 2 (strand B)", "• Only chimeras with one arm in each region are evidence; each is cofolded (RNAcofold)."} {
+	mustClick(t, tt, "COMRADES · for comparison")
+	tt.Frame()
+	if p.engine != engineComrades || p.mode != "paired" {
+		t.Fatalf("COMRADES of two regions: %q %q", p.engine, p.mode)
+	}
+	for _, text := range []string{"Region 2 (strand B)", "• Only chimeras with one arm in each region are evidence; each is cofolded (RNAcofold)."} {
 		if !tt.HasText(text) {
 			t.Fatalf("lacks %q: %q", text, tt.Texts())
 		}
@@ -913,11 +912,19 @@ func TestStructureCofoldForm(t *testing.T) {
 		t.Fatalf("large ensemble %q", pl.problems)
 	}
 	p.randomFolds = 0
-	// two joined regions are a COMRADES layout only: changing the engine resets it
-	p.engine = engineVienna
-	p.engineChanged()
-	if pl := p.plan(); p.mode != "genome" || *pl.req.Mode != "genome" {
-		t.Fatalf("mode %q", p.mode)
+	// two joined regions are a COMRADES layout only: sequence only keeps
+	// the two regions, as RNAcofold's two strands
+	p.setSteps(false, true)
+	if pl := p.plan(); p.engine != engineRNAcofold || p.mode != "genome" || *pl.req.Mode != "cofold" || len(pl.req.Regions) != 2 {
+		t.Fatalf("sequence only %q %q", p.engine, p.mode)
+	}
+	// COMRADES kept for one region: the whole RNA again
+	p.engine, p.mode = engineComrades, "paired"
+	tt.Frame()
+	mustClick(t, tt, "One region")
+	tt.Frame()
+	if pl := p.plan(); p.engine != engineComrades || p.mode != "genome" || *pl.req.Mode != "genome" {
+		t.Fatalf("COMRADES of one region: %q %q", p.engine, p.mode)
 	}
 	// a window prefill goes back to CPLfold
 	p.engine = engineCPLcofold

@@ -7,7 +7,7 @@ from pathlib import Path
 from desktop.runtime.bridge import handle
 from desktop.runtime.project import _structure_entry, new_project
 
-from desktop.runtime.tests.test_structure import GENE, ROOT, _sequence
+from desktop.runtime.tests.test_structure import GENE, RNACOFOLD_CLI, ROOT, _sequence
 
 ROW = "r{k}\tACGU\t.\t{g1}\t1\t20\t{a0}\t{a1}\t1e-5\t{g2}\t21\t40\t{b0}\t{b1}\t1e-5\t\t-10\tType_1\n"
 COORDINATE_CASES = json.loads(Path(__file__).with_name("coordinate_cases.json").read_text(encoding="utf-8"))
@@ -407,7 +407,7 @@ class SequenceSourceTests(unittest.TestCase):
             self._run(source="reference", gene_id=GENE, mode="windows", windows=[{"start": 1, "end": 7}], **fields)
 
     def test_comrades_needs_a_reference_region(self):
-        with self.assertRaisesRegex(ValueError, "ViennaRNA MFE or sequence-only CPLfold"):
+        with self.assertRaisesRegex(ValueError, "fold it with ViennaRNA MFE, or choose Reference region"):
             self._run(task_id="c1", engine="comrades", sequence=self.foreign)
 
     def test_two_pasted_strands_with_cplcofold(self):
@@ -431,6 +431,17 @@ class SequenceSourceTests(unittest.TestCase):
         meta = self._meta("co3")
         self.assertEqual(meta["sequence_source"]["mapped_to"], [f"{GENE}:1-80", "OTHER_RNA:41-100"])
         self.assertEqual(meta["records"][0]["evidence_rows"]["between"], 4)
+
+    def test_two_pasted_strands_with_rnacofold(self):
+        # folded from the sequences alone, so not located on the reference
+        structure, energy, _ = RNACOFOLD_CLI
+        result = self._run(task_id="rc1", engine="viennarna", mode="cofold", gene_id="pasted",
+                           sequence=self.one[:60], sequence_two=self.two[49:110])
+        self.assertTrue(result["ok"], result)
+        meta = self._meta("rc1")
+        self.assertEqual([r["gene_id"] for r in meta["regions"]], ["pasted_A", "pasted_B"])
+        self.assertEqual((meta["engine"], meta["records"][0]["energy"]), ("RNAcofold", energy))
+        self.assertEqual((self.project / "structures" / "rc1" / "structure.dbn").read_text().splitlines()[2], structure)
 
     def test_cplcofold_duplex_runs_within_the_task_cpus(self):
         # RNAduplex read support forks one process per worker: CPLcofold must not start

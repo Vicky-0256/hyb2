@@ -302,7 +302,7 @@ func TestStructureNewResultFocus(t *testing.T) {
 
 func TestStructureFailedTaskEngineNeutral(t *testing.T) {
 	a, f, tt, p := stSetupPage(t, 1800)
-	mustClick(t, tt, "ViennaRNA MFE, the sequence alone (optional hard pairs)")
+	stPick(t, tt, engineVienna, false)
 	mustClick(t, tt, "Run fold")
 	csSettle(a, tt)
 	started := f.startedKinds()
@@ -315,12 +315,9 @@ func TestStructureFailedTaskEngineNeutral(t *testing.T) {
 	stTaskState(a, tt, model.Task{Status: "failed", Error: referenceError})
 	mustClick(t, tt, "Technical details")
 
-	for _, tc := range []struct{ engine, choice string }{
-		{engineVienna, "ViennaRNA MFE, the sequence alone (optional hard pairs)"},
-		{engineCPLfold, "CPLfold, guided by the chimeric reads"},
-	} {
+	for _, tc := range []struct{ engine string }{{engineVienna}, {engineCPLfold}} {
 		t.Run(tc.engine, func(t *testing.T) {
-			mustClick(t, tt, tc.choice)
+			stPick(t, tt, tc.engine, false)
 			csSettle(a, tt)
 			task := a.Tasks["structure-1"]
 			if p.engine != tc.engine || p.lastTask != task.TaskID || a.TaskLabel(task) != taskLabel ||

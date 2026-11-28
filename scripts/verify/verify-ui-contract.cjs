@@ -420,12 +420,14 @@ assert.match(analysisPagesSource, /data-feature-action="comparison-export-deseq-
   "Compare must retain extended headered metadata for audit and custom R workflows");
 assert.doesNotMatch(overviewPageSource, /single-region HYB block bonus matrix/,
   "the Overview structure text must not imply that CPLfold uses one HYB block only");
-assert.match(overviewPageSource, /bonus matrix built from all eligible HYB rows in one selected reference region/,
+assert.match(overviewPageSource, /bonus matrix built from all eligible HYB rows in the selected regions/,
   "the Overview structure text must describe the full eligible-row bonus-matrix scope");
 assert.doesNotMatch(overviewPageSource, /structure workspace accepts reference regions, HYB record sequences, and pasted sequences/,
   "the Overview structure text must not imply that every structure mode exposes every sequence source");
-assert.match(overviewPageSource, /provides reference-region input for HYB-guided modes and supports HYB record or pasted sequence input in compatible sequence-only and ViennaRNA modes/,
-  "the Overview structure text must qualify sequence-source availability by mode");
+assert.match(overviewPageSource, /Folds guided by HYB chimeras read reference regions[^<]*Sequence-only folds also accept a HYB record \(one region\) or pasted sequences/,
+  "the Overview structure text must qualify sequence-source availability by the Evidence step");
+assert.doesNotMatch(overviewPageSource, /CPLfold\/Pyodide engine predicts[^<]*from a sequence or a bonus matrix/,
+  "the Overview structure text must not offer sequence-only CPLfold");
 assert.doesNotMatch(fs.readFileSync(path.join(repository, "web", "local-cplfold.html"), "utf8"), /bonus matrix from the selected HYB block/,
   "the local CPLfold guide must not imply that the bonus matrix comes from one HYB block");
 assert.match(fs.readFileSync(path.join(repository, "web", "local-cplfold.html"), "utf8"), /all eligible HYB rows in the selected reference region/,
@@ -730,6 +732,18 @@ context.window.Hyb2UI.handleAction(replaceState, { dataset: { featureAction: "re
 assert.equal(replaceState.dialog, null, "replacing HYB must close the Files dialog before landing renders");
 assert.equal(navigationApi.chooseHybCalls, 1);
 
+// The structure controls set the three setup steps (Evidence, Regions,
+// Algorithm) through analysis-data.js; the stubs above stay in place.
+{
+  const dataSandbox = vm.createContext({ window: {} });
+  vm.runInContext(engineCatalogSource, dataSandbox);
+  vm.runInContext(fs.readFileSync(path.join(repository, "web", "analysis-data.js"), "utf8"), dataSandbox, { filename: "analysis-data.js" });
+  context.window.Hyb2Data = Object.assign({}, dataSandbox.window.Hyb2Data, context.window.Hyb2Data);
+}
+const structureSteps = function (structure) {
+  const steps = context.window.Hyb2Data.structureSteps(structure);
+  return [steps.evidence, steps.regions, steps.algorithm];
+};
 let structureResetCount = 0;
 const structureResetOptions = [];
 context.window.Hyb2Structure = {
@@ -772,6 +786,8 @@ assert.equal(structureControlState.structure.constraintText, "",
   "changing the folded sequence must clear constraints authored for its predecessor");
 assert.equal(structureControlState.structure.selectedNucleotide, null);
 
+assert.deepEqual(structureSteps(structureControlState.structure), ["sequence", "one", "vienna"],
+  "manual hard pairs are an option of ViennaRNA MFE, sequence only");
 Object.assign(structureControlState.structure, {
   engine: "viennarna",
   source: "paste",
@@ -780,21 +796,25 @@ Object.assign(structureControlState.structure, {
 });
 context.window.Hyb2UI.handleChange(
   structureControlState,
-  { dataset: { feature: "structure-control", key: "engine" }, type: "select-one", value: "cplfold" },
+  { dataset: { feature: "structure-control", key: "stepEvidence" }, type: "select-one", value: "guided" },
   navigationApi
 );
-assert.equal(structureControlState.structure.engine, "cplfold");
+assert.deepEqual(structureSteps(structureControlState.structure), ["guided", "one", "cplfold"],
+  "guided by HYB chimeras, one region, defaults to CPLfold");
+assert.deepEqual([structureControlState.structure.engine, structureControlState.structure.constraintMode], ["cplfold", "none"]);
 assert.equal(structureControlState.structure.source, "reference",
   "HYB-guided CPLfold must use a mapped reference region");
 assert.equal(structureControlState.structure.constraintText, "",
   "switching engines must clear coordinate-specific ViennaRNA hard pairs");
+assert.equal(structureControlState.structure.stepEvidence, undefined, "a step control is not stored as a form field");
 context.window.Hyb2UI.handleChange(
   structureControlState,
   { dataset: { feature: "structure-control", key: "source" }, type: "select-one", value: "paste" },
   navigationApi
 );
-assert.equal(structureControlState.structure.cplfoldEvidence, "none",
-  "a non-reference CPLfold source must switch to sequence-only evidence semantics");
+assert.deepEqual([structureControlState.structure.cplfoldEvidence, structureControlState.structure.source], ["hyb-blocks", "reference"],
+  "a guided fold reads a reference region: a pasted source never switches the evidence to sequence only");
+assert.deepEqual(structureSteps(structureControlState.structure), ["guided", "one", "cplfold"]);
 context.window.Hyb2UI.handleChange(
   structureControlState,
   { dataset: { feature: "structure-control", key: "cplfoldAllowPseudoknot" }, type: "radio", value: "false" },
@@ -820,8 +840,9 @@ assert.equal(structureControlState.structure.source, "record");
 assert.equal(structureControlState.structure.selectedRecordIndex, 7);
 assert.equal(structureControlState.structure.constraintMode, "none",
   "folding a read must not retain reference-coordinate ViennaRNA evidence");
-assert.equal(structureControlState.structure.cplfoldEvidence, "none",
-  "folding a read must not retain reference-coordinate CPLfold evidence");
+assert.deepEqual(structureSteps(structureControlState.structure), ["sequence", "one", "vienna"],
+  "folding a read is a sequence-only ViennaRNA MFE fold, not reference-coordinate CPLfold evidence");
+assert.equal(structureControlState.structure.engine, "viennarna");
 assert.equal(navigationApi.lastNavigation, "structure");
 
 assert.match(appSource, /addEventListener\("hashchange", handleHashChange\)/);
@@ -1386,35 +1407,45 @@ console.log('skip-link-routing: ok');
   assert.deepEqual(switchScope(sandbox.state.structure, ["A", "B"]), ["A", 10, 190, null], "a parked region the user set comes back as set");
 
   // The untouched default setup is runnable: when its default region holds no
-  // eligible HYB row, CPLfold's default evidence becomes sequence only, the
-  // setup says so and offers the way back. A region or an evidence mode the
-  // user chose keeps the disabled Predict and its reason.
+  // eligible HYB row, its default Evidence (guided, CPLfold) becomes Sequence
+  // only (ViennaRNA MFE), the setup says so and offers the way back. A region
+  // or Evidence the user chose keeps the disabled Predict and its reason.
   const sync = pages.syncDefaultStructureEvidence;
   assert.equal(typeof sync, "function", "analysis-pages.js exports syncDefaultStructureEvidence");
+  const steps = function (page) {
+    const value = sandbox.window.Hyb2Data.structureSteps(page.structure);
+    return [value.evidence, value.regions, value.algorithm];
+  };
   const farOnly = function (structure) {
     const page = structurePage(structure);
     page.view.structureEvidence.records = page.view.structureEvidence.records.filter(function (record) { return record.id === "far"; });
     return page;
   };
-  // what page-data.js loads for the mode now set
-  const reload = function (page) { page.view.structureEvidence.guided = page.structure.cplfoldEvidence === "hyb-blocks"; };
+  // what page-data.js loads for the setup now set
+  const reload = function (page) {
+    const form = page.structure;
+    page.view.structureEvidence.guided = form.engine === "iris" ||
+      (form.engine === "cplfold" ? form.cplfoldEvidence === "hyb-blocks" : form.constraintMode === "hyb-guided");
+  };
   const disabledPredict = /data-feature-action="predict-structure"[^>]* disabled/;
   const fallbackNote = /class="notice structure-evidence-fallback"[^>]*>.*No HYB row lies fully inside the default region \(1–75\).*data-feature-action="structure-use-hyb-evidence"/;
 
   const supported = structurePage({ defaultRegionEnd: 201 });
   assert.equal(sync(supported), false, "a default region that holds HYB rows keeps the HYB evidence");
-  assert.equal(supported.structure.cplfoldEvidence, "hyb-blocks");
+  assert.deepEqual(steps(supported), ["guided", "one", "cplfold"]);
   assert.doesNotMatch(pages.renderStructure(supported), /structure-evidence-fallback/);
 
   const empty = farOnly({ defaultRegionEnd: 201 });
-  assert.equal(sync(empty), true, "a default region without HYB rows changes the evidence mode");
-  assert.deepEqual([empty.structure.end, empty.structure.cplfoldEvidence, !!empty.structure.evidenceFallback, !!empty.structure.evidenceChosen], [75, "none", true, false],
+  assert.equal(sync(empty), true, "a default region without HYB rows changes the evidence");
+  assert.deepEqual([empty.structure.end, empty.structure.engine, !!empty.structure.evidenceFallback, !!empty.structure.evidenceChosen], [75, "viennarna", true, false],
     "the capped default region falls back to sequence only, as a default");
+  assert.deepEqual(steps(empty), ["sequence", "one", "vienna"], "the fallback is Sequence only: ViennaRNA MFE, not sequence-only CPLfold");
   reload(empty);
   assert.equal(sync(empty), false, "the fallback is stable");
   const fallbackDraw = pages.renderStructure(empty);
-  assert.match(fallbackDraw, /A:1–75 · 75 nt · sequence only/, "the setup line names the sequence-only fold");
+  assert.match(fallbackDraw, /ViennaRNA MFE · A:1–75 · 75 nt · sequence only/, "the setup line names the sequence-only fold");
   assert.match(fallbackDraw, fallbackNote, "the setup says why it is sequence only and offers the way back");
+  assert.match(fallbackDraw, /data-key="stepEvidence"[^>]*>(?:(?!<\/select>).)*value="sequence" selected/, "the Evidence step shows Sequence only");
   assert.doesNotMatch(fallbackDraw, disabledPredict, "the untouched default setup can be predicted");
 
   // the region is edited (analysis-ui.js clears defaultRegionEnd): the HYB default is back
@@ -1422,6 +1453,7 @@ console.log('skip-link-routing: ok');
   empty.structure.end = 60;
   assert.equal(sync(empty), true, "a region the user set brings the default evidence back");
   assert.deepEqual([empty.structure.cplfoldEvidence, empty.structure.evidenceFallback, !!empty.structure.evidenceChosen], ["hyb-blocks", undefined, false]);
+  assert.deepEqual(steps(empty), ["guided", "one", "cplfold"]);
   reload(empty);
   assert.equal(sync(empty), false, "a region the user set is never given the fallback");
   const userRegionDraw = pages.renderStructure(empty);
@@ -1429,22 +1461,30 @@ console.log('skip-link-routing: ok');
   assert.match(userRegionDraw, /Cannot run yet: No forward-strand HYB rows are fully contained/, "and says why");
   assert.doesNotMatch(userRegionDraw, /structure-evidence-fallback/);
 
-  // the evidence mode is picked by hand: from then on it is the user's
+  // the Evidence step is set by hand: from then on it is the user's
   const picked = farOnly({ defaultRegionEnd: 201 });
   sync(picked);
   reload(picked);
-  picked.structure.cplfoldEvidence = "hyb-blocks";
+  sandbox.window.Hyb2Data.setStructureSteps(picked.structure, { evidence: "guided" });
   reload(picked);
-  assert.equal(sync(picked), false, "an evidence mode the user picked is not changed back");
+  assert.equal(sync(picked), false, "Evidence the user picked is not changed back");
   assert.deepEqual([picked.structure.cplfoldEvidence, picked.structure.evidenceChosen, picked.structure.evidenceFallback], ["hyb-blocks", true, undefined]);
-  assert.match(pages.renderStructure(picked), disabledPredict, "a picked HYB evidence mode without rows keeps Predict disabled");
+  assert.deepEqual(steps(picked), ["guided", "one", "cplfold"]);
+  assert.match(pages.renderStructure(picked), disabledPredict, "a picked HYB evidence without rows keeps Predict disabled");
+  // a form saved before the steps with sequence-only CPLfold opens as ViennaRNA MFE
   const sequenceOnly = farOnly({ defaultRegionEnd: 201, cplfoldEvidence: "none" });
   reload(sequenceOnly);
   assert.equal(sync(sequenceOnly), false);
   assert.doesNotMatch(pages.renderStructure(sequenceOnly), /structure-evidence-fallback/, "sequence only the user picked carries no fallback note");
+  assert.deepEqual(steps(sequenceOnly), ["sequence", "one", "vienna"]);
   const oneDataset = farOnly({ defaultRegionEnd: 201, evidenceDatasets: "d2" });
   assert.equal(sync(oneDataset), false, "a HYB evidence dataset the user picked is not replaced by sequence only");
   assert.equal(oneDataset.structure.cplfoldEvidence, "hyb-blocks");
+  assert.deepEqual(steps(oneDataset), ["guided", "one", "cplfold"]);
+  // two regions are not a default setup to fall back
+  const twoRegions = farOnly({ defaultRegionEnd: 201, cplfoldMode: "cofold", secondRna: "A", secondStart: 140, secondEnd: 170 });
+  assert.equal(sync(twoRegions), false, "only the default one-region CPLfold setup falls back");
+  assert.deepEqual(steps(twoRegions), ["guided", "two", "cplcofold"]);
 
   // a result on screen is not touched; the fallback follows a new default region
   const folded = farOnly({ defaultRegionEnd: 201 });
@@ -1453,10 +1493,11 @@ console.log('skip-link-routing: ok');
   folded.structure.rna = "B";
   folded.structure.result = { sequence: "GGGAAACCC" };
   assert.equal(sync(folded), false, "a setup that holds a result is left as it ran");
-  assert.equal(folded.structure.cplfoldEvidence, "none");
+  assert.deepEqual(steps(folded), ["sequence", "one", "vienna"]);
   folded.structure.result = null;
   assert.equal(sync(folded), true, "another default region is checked again from the HYB default");
   assert.equal(folded.structure.cplfoldEvidence, "hyb-blocks");
+  assert.deepEqual(steps(folded), ["guided", "one", "cplfold"]);
 
   assert.match(appSource, /let pendingData = requestPageData\(\);[\s\S]{0,400}if \(!pendingData && \(state\.activePage === "structure" \|\| state\.activePage === "report"\)[\s\S]{0,200}syncDefaultStructureEvidence\(state\)\) \{\s*pendingData = requestPageData\(\);/,
     "app.js settles the default evidence on current data, on RNA Structure and on the Report that shows the same setup, and then loads what the new mode needs");
@@ -1491,23 +1532,31 @@ console.log('structure-default-region-cap: ok');
     sandbox.window.Hyb2UI.handleChange(state, { dataset: { feature: "structure-control", key: key }, value: value, type: "select-one" }, { render: function () {}, showToast: function () {} });
   };
   const fitted = setup();
-  change(fitted, "cplfoldMode", "cofold");
+  change(fitted, "stepRegions", "two");
   const s = fitted.structure;
+  assert.deepEqual([s.engine, s.cplfoldMode, s.evidenceLayout], ["cplfold", "cofold", "paired"], "two guided regions default to CPLcofold");
   const total = (s.end - s.start + 1) + (s.secondEnd - s.secondStart + 1);
   assert.ok(total <= 75, "default CPLcofold regions fit the 75 nt gate (" + total + " nt)");
   assert.deepEqual([s.start, s.end], [1, 38], "region 1 keeps its start and half the length");
   assert.ok(s.secondStart <= 5000 && s.secondEnd >= 5025 && s.secondRna === "A", "region 2 is the partner window with HYB rows");
-  change(fitted, "cplfoldMode", "single");
+  // another algorithm for the same two regions keeps them
+  const fittedRegions = [s.start, s.end, s.secondRna, s.secondStart, s.secondEnd].join("|");
+  change(fitted, "stepAlgorithm", "comrades");
+  assert.deepEqual([s.engine, s.constraintMode, s.evidenceLayout], ["viennarna", "hyb-guided", "paired"], "COMRADES on two regions is its spacer layout");
+  assert.equal([s.start, s.end, s.secondRna, s.secondStart, s.secondEnd].join("|"), fittedRegions, "COMRADES folds the same two regions");
+  change(fitted, "stepAlgorithm", "cplcofold");
+  assert.equal([s.start, s.end, s.secondRna, s.secondStart, s.secondEnd].join("|"), fittedRegions);
+  change(fitted, "stepRegions", "one");
   assert.deepEqual([fitted.structure.start, fitted.structure.end], [1, 75], "back to one region restores the default region 1");
   // no row joins region 1 to a short window: both regions move to the rows
   const far = setup();
   far.records = [rec(5, 60, 5000, 5060), rec(300, 320, 900, 925), rec(302, 318, 905, 920)];
-  change(far, "cplfoldMode", "cofold");
+  change(far, "stepRegions", "two");
   const f = far.structure;
   assert.ok((f.end - f.start + 1) + (f.secondEnd - f.secondStart + 1) <= 75, "the moved regions fit the gate");
   assert.ok(f.start <= 300 && f.end >= 320 && f.secondStart <= 900 && f.secondEnd >= 925, "both regions hold the short HYB rows: " + [f.start, f.end, f.secondStart, f.secondEnd]);
   const userSet = setup({ secondRegionEdited: true });
-  change(userSet, "cplfoldMode", "cofold");
+  change(userSet, "stepRegions", "two");
   assert.deepEqual([userSet.structure.end, userSet.structure.secondStart, userSet.structure.secondEnd], [75, 10607, 10807],
     "a region 2 the user set is not moved");
   console.log("structure-default-cofold-regions: ok");

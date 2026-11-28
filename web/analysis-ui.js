@@ -2226,10 +2226,11 @@
 
   function applyLegacyWorkflow(state, key, value) {
     applyLegacyWorkflowSettings(state, key, value);
-    if (["cplfoldMode", "workflow", "engine"].indexOf(key) !== -1) {
+    if (key === "workflow" || Object.hasOwn(STRUCTURE_STEP_KEYS, key)) {
       const structure = state.structure;
       // back to one region: the default region 1 the fit replaced returns
-      if (structure && structure.cofoldFitFrom && !(structure.engine === "cplfold" && structure.cplfoldMode === "cofold")) {
+      // (two regions keep it, so another algorithm folds the same regions)
+      if (structure && structure.cofoldFitFrom && structure.cplfoldMode !== "cofold") {
         if (structure.defaultRegionEnd != null) {
           structure.start = structure.cofoldFitFrom.start;
           structure.end = structure.cofoldFitFrom.end;
@@ -2317,36 +2318,36 @@
     }
   }
 
-  function syncCplfoldModel(structure) {
-    const catalog = globalThis.Hyb2EngineParameters[structure.cplfoldMode === "cofold" ? "cplcofold" : "cplfold"];
-    if (!catalog.models.some(option => option.value === structure.cplfoldEnergyModel)) {
-      structure.cplfoldEnergyModel = catalog.defaultModel;
-    }
-  }
+  // The controls of the three setup steps (Evidence, Regions, Algorithm) and
+  // the step each sets. They are not form fields: each sets the fields its
+  // step is read from (analysis-data.js structureSteps).
+  const STRUCTURE_STEP_KEYS = Object.freeze({ stepEvidence: "evidence", stepRegions: "regions", stepAlgorithm: "algorithm" });
 
   function applyLegacyWorkflowSettings(state, key, value) {
     const structure = state.structure;
-    if (key === "engine" && value === "cplfold" && structure.source === "reference") {
-      structure.cplfoldMode = structure.evidenceLayout === "paired" ? "cofold" : "single";
-    }
-    if (key === "cplfoldMode") {
-      structure.evidenceLayout = value === "cofold" ? "paired" : "single";
-      structure.homodimerOnly = false;
-      if (value === "cofold" && !structure.secondRna) structure.secondRna = structure.rna;
-      // A second region that copies the first would fold a fragment with itself.
-      if (value === "cofold" && structure.secondRna === structure.rna &&
-          Number(structure.secondStart) === Number(structure.start) && Number(structure.secondEnd) === Number(structure.end)) {
-        const partner = window.Hyb2Data && window.Hyb2Data.structurePartnerWindow(state);
-        if (partner) {
-          structure.secondRna = partner.rna;
-          structure.secondStart = partner.start;
-          structure.secondEnd = partner.end;
+    if (Object.hasOwn(STRUCTURE_STEP_KEYS, key)) {
+      const before = window.Hyb2Data.structureSteps(structure);
+      const steps = window.Hyb2Data.setStructureSteps(structure, { [STRUCTURE_STEP_KEYS[key]]: value });
+      if (steps.regions === "two" && before.regions !== "two") {
+        if (!structure.secondRna) structure.secondRna = structure.rna;
+        // A second region that copies the first would fold a fragment with itself.
+        if (structure.secondRna === structure.rna &&
+            Number(structure.secondStart) === Number(structure.start) && Number(structure.secondEnd) === Number(structure.end)) {
+          const partner = window.Hyb2Data.structurePartnerWindow(state);
+          if (partner) {
+            structure.secondRna = partner.rna;
+            structure.secondStart = partner.start;
+            structure.secondEnd = partner.end;
+          }
         }
       }
-    }
-    if (["cplfoldMode", "engine"].indexOf(key) !== -1 && structure.engine === "cplfold") {
-      syncCplfoldModel(structure);
-      if (structure.cplfoldMode === "cofold" && structure.source === "record") structure.source = "paste";
+      // A preset sets the evidence and the regions. Another algorithm for
+      // them keeps the preset, so COMRADES can fold the preset's regions.
+      if (steps.evidence !== before.evidence || steps.regions !== before.regions) {
+        structure.workflow = "custom";
+        structure.homodimerOnly = false;
+      }
+      return;
     }
     if (key !== "workflow") {
       if (["engine", "source", "constraintMode", "evidenceLayout", "homodimerOnly", "secondRna", "cplfoldMode"].indexOf(key) !== -1) {
@@ -2356,12 +2357,13 @@
       if (key === "rna" && ["long-intramolecular", "homodimer"].indexOf(structure.workflow) !== -1) {
         structure.secondRna = structure.rna;
       }
-      if (structure.engine === "cplfold" && structure.workflow === "homodimer") {
+      // the homodimer preset folds the same region twice
+      if (structure.workflow === "homodimer") {
         if (key === "start") structure.secondStart = structure.start;
         if (key === "end") structure.secondEnd = structure.end;
         if (["secondStart", "secondEnd"].indexOf(key) !== -1) {
           structure.workflow = "custom";
-          structure.homodimerOnly = false;
+          if (structure.engine === "cplfold") structure.homodimerOnly = false;
         }
       }
       return;
@@ -2370,20 +2372,14 @@
       if (structure.engine === "cplfold") structure.homodimerOnly = false;
       return;
     }
-    const cplfold = structure.engine === "cplfold";
-    if (cplfold) {
-      structure.cplfoldMode = value === "short-intramolecular" ? "single" : "cofold";
-      syncCplfoldModel(structure);
-    } else {
-      structure.engine = "viennarna";
-    }
-    structure.source = "reference";
-    structure.constraintMode = cplfold ? "none" : "hyb-guided";
-    structure.evidenceLayout = value === "short-intramolecular" ? "single" : "paired";
+    // Each preset sets the three steps: guided by the HYB chimeras, one
+    // region with CPLfold or two with CPLcofold.
+    const one = value === "short-intramolecular";
+    window.Hyb2Data.setStructureSteps(structure, { evidence: "guided", regions: one ? "one" : "two", algorithm: one ? "cplfold" : "cplcofold" });
     structure.homodimerOnly = value === "homodimer";
     if (value === "long-intramolecular" || value === "homodimer") {
       structure.secondRna = structure.rna;
-    } else if (value === "intermolecular" && (structure.secondRna === structure.rna || (cplfold && !structure.secondRna))) {
+    } else if (value === "intermolecular" && (structure.secondRna === structure.rna || !structure.secondRna)) {
       structure.secondRna = (state.summary.rnaNames || []).find(function (rna) { return rna !== structure.rna; }) || "";
     }
     if (value === "homodimer") {
@@ -2393,7 +2389,21 @@
   }
 
   function structureControlChangesSequence(key) {
-    return ["workflow", "engine", "source", "rna", "start", "end", "pastedSequence", "cplfoldSequenceTwo", "cplfoldMode", "selectedRecordIndex", "evidenceLayout", "secondRna", "secondStart", "secondEnd", "homodimerOnly", "cplfoldEvidence", "evidenceDatasets"].indexOf(key) !== -1;
+    return ["workflow", "engine", "source", "rna", "start", "end", "pastedSequence", "cplfoldSequenceTwo", "cplfoldMode", "selectedRecordIndex", "evidenceLayout", "secondRna", "secondStart", "secondEnd", "homodimerOnly", "cplfoldEvidence", "evidenceDatasets", "stepEvidence", "stepRegions", "stepAlgorithm"].indexOf(key) !== -1;
+  }
+
+  // A Structure setup control changed. A step control sets the fields its
+  // step is read from; any other control is stored as its field. The form
+  // is then left in a state the steps can show: a guided fold reads a
+  // reference region (the evidence is never switched to suit the source).
+  function changeStructureControl(state, key, element) {
+    resetStructureForControl(state, key);
+    const value = structureControlValue(element, key);
+    if (!Object.hasOwn(STRUCTURE_STEP_KEYS, key)) {
+      state.structure[key] = value;
+    }
+    applyLegacyWorkflow(state, key, value);
+    window.Hyb2Data.normaliseStructureSetup(state.structure);
   }
 
   function resetStructureForControl(state, key) {
@@ -2583,30 +2593,7 @@
     }
 
     if (feature === "structure-control") {
-      resetStructureForControl(state, key);
-      const value = structureControlValue(element, key);
-      state.structure[key] = value;
-      applyLegacyWorkflow(state, key, value);
-      if (key === "engine" && value === "iris") {
-        state.structure.source = "reference"; state.structure.workflow = "custom";
-        state.structure.constraintMode = "none"; state.structure.evidenceLayout = "single";
-      }
-      if (key === "constraintMode" && value === "hyb-guided") {
-        state.structure.source = "reference";
-      }
-      if ((key === "engine" && value === "cplfold" && state.structure.cplfoldEvidence === "hyb-blocks") ||
-          (key === "cplfoldEvidence" && value === "hyb-blocks")) {
-        state.structure.source = "reference";
-      }
-      if (key === "engine" && value === "viennarna" && state.structure.constraintMode === "hyb-guided") {
-        state.structure.source = "reference";
-      }
-      if (key === "source" && value !== "reference" && state.structure.constraintMode === "hyb-guided") {
-        state.structure.constraintMode = "none";
-      }
-      if (key === "source" && value !== "reference" && state.structure.engine === "cplfold") {
-        state.structure.cplfoldEvidence = "none";
-      }
+      changeStructureControl(state, key, element);
       api.render();
       return true;
     }
@@ -2714,30 +2701,7 @@
       return true;
     }
     if (feature === "structure-control" && state.structure) {
-      resetStructureForControl(state, key);
-      const value = structureControlValue(element, key);
-      state.structure[key] = value;
-      applyLegacyWorkflow(state, key, value);
-      if (key === "engine" && value === "iris") {
-        state.structure.source = "reference"; state.structure.workflow = "custom";
-        state.structure.constraintMode = "none"; state.structure.evidenceLayout = "single";
-      }
-      if (key === "constraintMode" && value === "hyb-guided") {
-        state.structure.source = "reference";
-      }
-      if ((key === "engine" && value === "cplfold" && state.structure.cplfoldEvidence === "hyb-blocks") ||
-          (key === "cplfoldEvidence" && value === "hyb-blocks")) {
-        state.structure.source = "reference";
-      }
-      if (key === "engine" && value === "viennarna" && state.structure.constraintMode === "hyb-guided") {
-        state.structure.source = "reference";
-      }
-      if (key === "source" && value !== "reference" && state.structure.constraintMode === "hyb-guided") {
-        state.structure.constraintMode = "none";
-      }
-      if (key === "source" && value !== "reference" && state.structure.engine === "cplfold") {
-        state.structure.cplfoldEvidence = "none";
-      }
+      changeStructureControl(state, key, element);
       return true;
     }
     if (feature === "fasta-mapping-editor" && state.fasta) {
@@ -2842,23 +2806,14 @@
       if (window.Hyb2Structure) {
         window.Hyb2Structure.reset(state, { clearConstraints: true });
       }
+      // A raw HYB record supplies its read sequence, one strand, not a
+      // mapped reference interval: it folds from the sequence only, as one
+      // region (ViennaRNA MFE).
+      window.Hyb2Data.setStructureSteps(state.structure, { evidence: "sequence", regions: "one" });
       state.structure.source = "record";
       state.structure.selectedRecordIndex = Number(element.dataset.recordIndex);
-      if (state.structure.engine === "cplfold") {
-        state.structure.cplfoldMode = "single";
-        syncCplfoldModel(state.structure);
-        state.structure.evidenceLayout = "single";
-        state.structure.workflow = "custom";
-        state.structure.homodimerOnly = false;
-      }
-      // A raw HYB record supplies its read sequence, not a mapped reference
-      // interval. Reference-coordinate evidence must therefore be disabled.
-      if (state.structure.constraintMode === "hyb-guided") {
-        state.structure.constraintMode = "none";
-      }
-      if (state.structure.engine === "cplfold" && state.structure.cplfoldEvidence === "hyb-blocks") {
-        state.structure.cplfoldEvidence = "none";
-      }
+      state.structure.workflow = "custom";
+      state.structure.homodimerOnly = false;
       api.navigate("structure");
       return true;
     }
@@ -3430,12 +3385,12 @@
         return true;
       }
       if (action === "region-send-structure") {
-        const cplfold = state.structure.engine === "cplfold";
-        const partner = cplfold ? window.Hyb2Pages.getRegionPartner(state.region) : null;
+        // The partner range, when one is set, is the second region of the fold.
+        const partner = window.Hyb2Pages.getRegionPartner(state.region);
         const partnerCoordinatesEntered = [state.region.partnerStart, state.region.partnerEnd].some(function (value) {
           return value !== undefined && value !== null && String(value).trim() !== "";
         });
-        if (cplfold && !partner && partnerCoordinatesEntered) {
+        if (!partner && partnerCoordinatesEntered) {
           api.showToast("Enter a partner RNA and valid 1-based start/end coordinates for the second region, or clear both partner coordinates to fold one region.");
           return true;
         }
@@ -3447,16 +3402,13 @@
         state.structure.start = reference.start;
         state.structure.end = reference.end;
         delete state.structure.defaultRegionEnd;
-        if (cplfold) {
-          state.structure.workflow = "custom";
-          state.structure.cplfoldMode = partner ? "cofold" : "single";
-          state.structure.evidenceLayout = partner ? "paired" : "single";
-          state.structure.secondRna = partner ? partner.rna : "";
-          state.structure.secondStart = partner ? partner.start : "";
-          state.structure.secondEnd = partner ? partner.end : "";
-          state.structure.homodimerOnly = false;
-          syncCplfoldModel(state.structure);
-        }
+        // the Evidence and the Algorithm are kept where the Regions allow
+        window.Hyb2Data.setStructureSteps(state.structure, { regions: partner ? "two" : "one" });
+        state.structure.workflow = "custom";
+        state.structure.secondRna = partner ? partner.rna : "";
+        state.structure.secondStart = partner ? partner.start : "";
+        state.structure.secondEnd = partner ? partner.end : "";
+        state.structure.homodimerOnly = false;
         api.navigate("structure");
       }
       if (action === "region-download-fasta") {

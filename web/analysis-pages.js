@@ -1052,13 +1052,13 @@
       ].join("");
     }
 
-    const pairedCplfold = state && !state.canRequestFold && state.structure &&
-      state.structure.engine === "cplfold" && getRegionPartner(region);
+    // a partner range is sent as region 2, for any algorithm (analysis-ui.js region-send-structure)
+    const pairedRegions = state && !state.canRequestFold && state.structure && getRegionPartner(region);
     return [
       '<section class="reference-panel data-card"><div><span class="drawer-kicker">Reference sequence</span><h2>' + escape(reference.id) + ":" + range(reference.start, reference.end) + "</h2>",
       renderGroupedSequence(reference.sequence, reference.start),
       "</div>",
-      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="copy-region-sequence">Copy sequence</button><button class="button button-secondary" type="button" data-feature-action="region-send-structure">' + (pairedCplfold ? "Send both regions to CPLcofold" : "Send to RNA Structure") + '</button><button class="button button-secondary" type="button" data-feature-action="region-download-fasta">Download FASTA</button></div></section>'
+      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="copy-region-sequence">Copy sequence</button><button class="button button-secondary" type="button" data-feature-action="region-send-structure">' + (pairedRegions ? "Send both regions to RNA Structure" : "Send to RNA Structure") + '</button><button class="button button-secondary" type="button" data-feature-action="region-download-fasta">Download FASTA</button></div></section>'
     ].join("");
   }
 
@@ -1153,42 +1153,50 @@
     const structure = state.structure;
     structureDatasets = state.datasets || [];
     const rnas = structureRnaNames(state);
+    // A form saved or set before the three setup steps opens as its steps
+    // read (analysis-data.js structureSteps): never in a state they cannot show.
+    window.Hyb2Data.normaliseStructureSetup(structure);
     // The default region is capped before anything is derived from it: this
     // draw may be the only one (the page's data can already be loaded, as
     // after the Report), so the sequence must be the capped region's.
     syncStoredCplfoldCapacity(structure);
     capDefaultStructureRegion(structure);
     const sequenceInfo = getStructureSequence(state);
+    const steps = window.Hyb2Data.structureSteps(structure);
     const cplfold = structure.engine === "cplfold";
     const cofold = cplfold && structure.cplfoldMode === "cofold";
     const iris = structure.engine === "iris";
-    const cplfoldGuided = cplfold && structure.cplfoldEvidence === "hyb-blocks";
-    const sourceOptions = (cplfoldGuided || iris) ? [
-      { value: "reference", label: "Reference region" }
-    ] : [
-      { value: "reference", label: "Reference region" },
-      { value: "record", label: "HYB record sequence" },
+    const rnacofold = steps.algorithm === "rnacofold";
+    // CPLcofold and RNAcofold fold the two regions as strands A and B
+    const twoStrands = cofold || rnacofold;
+    // A guided fold reads a reference region; a HYB record is one strand.
+    const sourceOptions = [{ value: "reference", label: "Reference region" }].concat(steps.evidence === "guided" ? [] : [
+      steps.regions === "one" ? { value: "record", label: "HYB record sequence" } : null,
       { value: "paste", label: "Paste sequence" }
-    ];
-    if (cofold) {
-      const recordIndex = sourceOptions.findIndex(function (option) { return option.value === "record"; });
-      if (recordIndex !== -1) sourceOptions.splice(recordIndex, 1);
-    }
-    const engineOptions = [
-      { value: "viennarna", label: "ViennaRNA · nested MFE" },
-      { value: "cplfold", label: "CPLfold · energy-guided folding" },
-      { value: "iris", label: "IRIS · evidence-guided ensemble" }
-    ];
+    ].filter(Boolean));
+    const algorithmLabels = {
+      cplfold: "CPLfold · Hyb2",
+      cplcofold: "CPLcofold · Hyb2",
+      comrades: "COMRADES · for comparison",
+      iris: "IRIS · for comparison",
+      vienna: "ViennaRNA MFE",
+      rnacofold: "RNAcofold"
+    };
+    const algorithmOptions = window.Hyb2Data.structureAlgorithms(steps.evidence, steps.regions).map(function (value) {
+      return { value: value, label: algorithmLabels[value] };
+    });
+    // Each preset sets the three steps (guided; CPLfold for one region,
+    // CPLcofold for two) and stays set when another algorithm is chosen for
+    // its regions, so its labels name no algorithm. Custom leaves them alone.
     const workflowOptions = [
-      { value: "custom", label: "Custom engine and reference layout" },
-      { value: "short-intramolecular", label: cplfold ? "One local region · CPLfold" : "Short-ranged intramolecular (<500 nt)" },
-      { value: "long-intramolecular", label: cplfold ? "Two local regions of the same RNA · CPLcofold" : "Long-ranged intramolecular" },
-      { value: "intermolecular", label: cplfold ? "Two local regions of different RNAs · CPLcofold" : "Intermolecular" },
-      { value: "homodimer", label: "Homodimer (overlap ≥ 5)" }
+      { value: "custom", label: "Custom" },
+      { value: "short-intramolecular", label: "Short-range intramolecular · one region" },
+      { value: "long-intramolecular", label: "Long-range intramolecular · two regions of one RNA" },
+      { value: "intermolecular", label: "Intermolecular · two RNAs" },
+      { value: "homodimer", label: "Homodimer · the same region twice (overlap ≥ 5)" }
     ];
     const constraintModeOptions = [
       { value: "none", label: "Plain MFE" },
-      { value: "hyb-guided", label: "COMRADES(ViennaRNA)" },
       { value: "manual-hard-base-pairs", label: "Manual hard base pairs (expert)" }
     ];
     const manualConstraintMode = !cplfold && !iris && structure.constraintMode === "manual-hard-base-pairs";
@@ -1223,48 +1231,57 @@
       largeEnsembleNeedsConsent ? "Confirm the large ensemble under Options (more than 100 random folds) to run it." : "";
     const needsMeasure = cplfold && !cplfoldNativeAvailable(structure) && cplfoldLengthUnavailable &&
       length <= cplfoldCapacity(structure).hardCeiling && !capacityRunning;
-    const methodBadge = iris ? "IRIS + ViennaRNA · Browser" : cplfold
-      ? (cplfoldNativeAvailable(structure) ? "CPLfold · Desktop runtime" : (cofold ? "CPLcofold + Pyodide · Browser" : "CPLfold + Pyodide · Browser"))
-      : guidedConstraintMode
-      ? "RNAcofold + constrained RNAfold · Browser"
-      : (manualConstraintMode ? "ViennaRNA hard pairs · Browser" : "ViennaRNA MFE · Browser");
+    const methodBadge = {
+      cplfold: "CPLfold · Hyb2", cplcofold: "CPLcofold · Hyb2",
+      comrades: "COMRADES(ViennaRNA) · for comparison", iris: "IRIS · for comparison",
+      vienna: manualConstraintMode ? "ViennaRNA MFE · hard pairs" : "ViennaRNA MFE", rnacofold: "RNAcofold · ViennaRNA"
+    }[steps.algorithm] + (cplfold && cplfoldNativeAvailable(structure) ? " · Desktop runtime" : cplfold ? " · Browser (Pyodide)" : " · Browser");
     const actionLabel = iris ? "Predict IRIS ensemble" : cplfold
       ? (cofold ? "Predict CPLcofold candidates" : "Predict CPLfold candidates")
       : guidedConstraintMode
-      ? "Run HYB-guided ensemble"
+      ? "Run COMRADES ensemble"
+      : rnacofold ? "Predict RNAcofold structure"
       : (manualConstraintMode ? "Predict constrained MFE" : "Predict MFE structure");
     const setupOpen = !result || (window.Hyb2OpenSections && window.Hyb2OpenSections["structure-setup"] === true);
 
     const sequenceColumn = [
-      cplfold ? renderSelectControl("Folding layout", "cplfoldMode", structure.cplfoldMode || "single", [
-        { value: "single", label: "One region / RNA · CPLfold" },
-        { value: "cofold", label: "Two local regions · CPLcofold" }
-      ], "structure-control") : "",
-      // Pasting needs no HYB evidence: Sequence source offers it only with "Sequence only".
-      cofold ? '<p class="card-note">Choose two local regions from the same RNA or from different RNAs' + (cplfoldGuided ? ". To paste two sequences instead, first set Experimental evidence to “Sequence only”." : ", or set Sequence source to “Paste sequence” to enter two sequences.") + ' CPLcofold treats the selected fragments as separate 5′→3′ strands. Only their combined length is folded; the intervening reference sequence is excluded.</p>' : "",
+      // Pasting needs no HYB evidence: Sequence source offers it only with Sequence only.
+      twoStrands ? '<p class="card-note">Choose two regions of the same RNA or of different RNAs' + (steps.evidence === "guided" ? "; to paste two sequences instead, set Evidence to Sequence only." : ", or set Sequence source to Paste sequence to enter two sequences.") + " " + (cofold ? "CPLcofold" : "RNAcofold") + ' folds them as separate 5′→3′ strands A and B. Only their combined length is folded; the reference sequence between them is excluded.</p>' : "",
       renderSelectControl("Sequence source", "source", structure.source, sourceOptions, "structure-control"),
       structure.source === "reference" ? [
-        renderSelectControl(cofold ? "Region 1 RNA (strand A)" : guidedConstraintMode ? "Region 1 RNA" : "RNA", "rna", structure.rna, rnas.map(function (rna) { return { value: rna, label: rna }; }), "structure-control"),
-        '<div class="control-grid">' + renderTextControl(cofold ? "Region 1 start" : "Start", "start", structure.start, "Start", "structure-control", "number", { min: 1, step: 1 }) + renderTextControl(cofold ? "Region 1 end" : "End", "end", structure.end, "End", "structure-control", "number", { min: 1, step: 1 }) + "</div>"
+        renderSelectControl(twoStrands ? "Region 1 RNA (strand A)" : guidedConstraintMode && steps.regions === "two" ? "Region 1 RNA" : "RNA", "rna", structure.rna, rnas.map(function (rna) { return { value: rna, label: rna }; }), "structure-control"),
+        '<div class="control-grid">' + renderTextControl(twoStrands ? "Region 1 start" : "Start", "start", structure.start, "Start", "structure-control", "number", { min: 1, step: 1 }) + renderTextControl(twoStrands ? "Region 1 end" : "End", "end", structure.end, "End", "structure-control", "number", { min: 1, step: 1 }) + "</div>"
       ].join("") : "",
       structure.source === "record" ? renderSelectControl("HYB record", "selectedRecordIndex", String(structure.selectedRecordIndex === null ? "" : structure.selectedRecordIndex), [{ value: "", label: "Choose a loaded record" }].concat(selectableRecords.map(function (record) { return { value: String(record.index), label: record.id + " · " + record.rnaOne + "–" + record.rnaTwo }; })), "structure-control") : "",
       structure.source === "record" ? '<div class="notice notice-warning"><strong>Hybrid-read sequence</strong> This is the chimeric sequence stored in the selected HYB record. It is not necessarily a complete reference RNA or genomic region.</div>' : "",
-      structure.source === "paste" ? '<label class="control-field"><span>' + (cofold ? "RNA A sequence" : "Paste RNA sequence") + '</span><textarea class="sequence-textarea" rows="6" name="pastedSequence" spellcheck="false" autocomplete="off" autocapitalize="off" data-feature="structure-control" data-key="pastedSequence" placeholder="ACGU…">' + escape(structure.pastedSequence || "") + "</textarea></label>" : "",
-      cofold && structure.source === "reference" ? [
+      structure.source === "paste" ? '<label class="control-field"><span>' + (twoStrands ? "RNA A sequence" : "Paste RNA sequence") + '</span><textarea class="sequence-textarea" rows="6" name="pastedSequence" spellcheck="false" autocomplete="off" autocapitalize="off" data-feature="structure-control" data-key="pastedSequence" placeholder="ACGU…">' + escape(structure.pastedSequence || "") + "</textarea></label>" : "",
+      twoStrands && structure.source === "reference" ? [
         renderSelectControl("Region 2 RNA (strand B)", "secondRna", structure.secondRna, rnas.map(function (rna) { return { value: rna, label: rna }; }), "structure-control"),
         '<div class="control-grid">' + renderTextControl("Region 2 start", "secondStart", structure.secondStart, "Start", "structure-control", "number", { min: 1, step: 1 }) + renderTextControl("Region 2 end", "secondEnd", structure.secondEnd, "End", "structure-control", "number", { min: 1, step: 1 }) + '</div>'
       ].join("") : "",
-      cofold && structure.source === "paste" ? '<label class="control-field"><span>RNA B sequence</span><textarea class="sequence-textarea" rows="4" name="cplfoldSequenceTwo" spellcheck="false" autocomplete="off" autocapitalize="off" data-feature="structure-control" data-key="cplfoldSequenceTwo" placeholder="ACGU…">' + escape(structure.cplfoldSequenceTwo || "") + '</textarea><small>The first box is RNA A. Alternatively paste A&amp;B there and leave RNA B empty.</small></label>' : "",
+      twoStrands && structure.source === "paste" ? '<label class="control-field"><span>RNA B sequence</span><textarea class="sequence-textarea" rows="4" name="cplfoldSequenceTwo" spellcheck="false" autocomplete="off" autocapitalize="off" data-feature="structure-control" data-key="cplfoldSequenceTwo" placeholder="ACGU…">' + escape(structure.cplfoldSequenceTwo || "") + '</textarea><small>The first box is RNA A. Alternatively paste A&amp;B there and leave RNA B empty.</small></label>' : "",
       guidedConstraintMode ? renderGuidedStructureSetup(structure, rnas, sequenceInfo, "sequence") : "",
       sequenceInfo.error ? '<div class="notice notice-warning">' + escape(sequenceInfo.error) + "</div>" : "",
       renderStructureLengthBar(length, iris ? "iris" : cplfold ? "cplfold" : "viennarna", structure, lengthNotice),
       renderStructurePreparation(sequenceInfo, structure)
     ].join("");
 
+    // The three setup steps (analysis-data.js structureSteps): Evidence,
+    // Regions, then the Algorithm those two offer.
     const methodColumn = [
-      !iris ? renderSelectControl("Folding workflow", "workflow", structure.workflow || "custom", workflowOptions, "structure-control") : "",
-      renderSelectControl("Prediction engine", "engine", structure.engine || "viennarna", engineOptions, "structure-control"),
-      !cplfold && !iris ? renderSelectControl("Folding mode", "constraintMode", structure.constraintMode || "none", constraintModeOptions, "structure-control") : "",
+      renderSelectControl("Folding workflow", "workflow", structure.workflow || "custom", workflowOptions, "structure-control"),
+      renderSelectControl("Evidence", "stepEvidence", steps.evidence, [
+        { value: "guided", label: "Guided by HYB chimeras" },
+        { value: "sequence", label: "Sequence only" }
+      ], "structure-control"),
+      // syncDefaultStructureEvidence chose sequence only: say so, with the way back
+      structure.evidenceFallback && steps.evidence === "sequence" ? '<div class="notice structure-evidence-fallback" role="note"><span>No HYB row lies fully inside the default region (' + range(structure.start, structure.end) + '), so this fold uses the sequence only. Set a region that holds HYB rows to use them.</span><button class="quiet-button" type="button" data-feature-action="structure-use-hyb-evidence">Switch back to HYB evidence</button></div>' : "",
+      renderSelectControl("Regions", "stepRegions", steps.regions, [
+        { value: "one", label: "One region" },
+        { value: "two", label: "Two regions" }
+      ], "structure-control"),
+      renderSelectControl("Algorithm", "stepAlgorithm", steps.algorithm, algorithmOptions, "structure-control"),
+      steps.algorithm === "vienna" ? renderSelectControl("Folding mode", "constraintMode", structure.constraintMode || "none", constraintModeOptions, "structure-control") : "",
       cplfold ? renderCplfoldSetup(structure, sequenceInfo, "method") : "",
       iris ? '<p class="card-note">IRIS redistributes HYB evidence, generates constrained structures, then selects a weighted ensemble. Uses one reference region; no files leave this browser. <a href="https://github.com/JY-Zhou/IRIS" target="_blank" rel="noopener noreferrer">IRIS source</a> · <a href="./vendor/iris/LICENSE" target="_blank" rel="noopener noreferrer">Licence</a></p>' : renderStructureAbout(structure, cplfold, guidedConstraintMode, manualConstraintMode, length)
     ].join("");
@@ -1279,7 +1296,7 @@
     ].join("");
 
     return [
-      '<div class="page-heading structure-page-heading"><div><h1>RNA structure</h1><p>Fold a region with ViennaRNA, CPLfold or IRIS, optionally guided by HYB evidence, in this browser.</p></div>' + (result ? renderStructureExportMenu(result) : "") + "</div>",
+      '<div class="page-heading structure-page-heading"><div><h1>RNA structure</h1><p>Fold one region or two in this browser: guided by the HYB chimeras with CPLfold or CPLcofold (COMRADES and IRIS for comparison), or from the sequence alone with ViennaRNA MFE or RNAcofold.</p></div>' + (result ? renderStructureExportMenu(result) : "") + "</div>",
       iris ? '<p class="card-note">IRIS browser adaptation · up to 300 nt and 2,000 evidence rows · 37 °C · nested structures</p>' : renderStructureCapacityStrip(structure),
       '<details class="structure-setup-panel data-card" data-open-key="structure-setup"' + (setupOpen ? " open" : "") + (result ? ' data-has-result="true"' : "") + ">",
       '<summary class="structure-setup-summary"><span class="structure-setup-title">Setup</span><span class="structure-setup-line">' + escape(structureSetupSummary(structure, sequenceInfo, length, guidedConstraintMode, manualConstraintMode)) + '</span>' + (result ? '<span class="structure-setup-edit" aria-hidden="true">Edit setup</span>' : "") + "</summary>",
@@ -1339,14 +1356,19 @@
   // One line under the setup's title: what will run (or ran) on what.
   function structureSetupSummary(structure, sequenceInfo, length, guidedConstraintMode, manualConstraintMode) {
     const cplfold = structure.engine === "cplfold";
-    const parts = [structure.engine === "iris" ? "IRIS ensemble" : cplfold ? (structure.cplfoldMode === "cofold" ? "CPLcofold" : "CPLfold") : (guidedConstraintMode ? "COMRADES(ViennaRNA)" : (manualConstraintMode ? "ViennaRNA · hard pairs" : "ViennaRNA · plain MFE"))];
+    const steps = window.Hyb2Data.structureSteps(structure);
+    const parts = [{ cplfold: "CPLfold", cplcofold: "CPLcofold", comrades: "COMRADES(ViennaRNA)", iris: "IRIS ensemble",
+      vienna: manualConstraintMode ? "ViennaRNA MFE · hard pairs" : "ViennaRNA MFE", rnacofold: "RNAcofold" }[steps.algorithm]];
     parts.push(sequenceInfo.label ? truncate(displaySequenceLabel(sequenceInfo.label), 60) : "no sequence yet");
     if (length) {
       parts.push(format(length) + " nt");
     }
+    if (steps.evidence === "sequence") {
+      parts.push("sequence only");
+    }
     if (cplfold) {
       const assembly = sequenceInfo.assembly;
-      parts.push(structure.cplfoldEvidence === "none" ? "sequence only" : "HYB evidence (" + countLabel(assembly ? assembly.eligibleRecordCount : 0, "row") + ")");
+      parts.push("HYB evidence (" + countLabel(assembly ? assembly.eligibleRecordCount : 0, "row") + ")");
       const pk = globalThis.Hyb2CplfoldSettings.formTopology(structure);
       parts.push(pk === null ? "choose a structure topology" : pk ? "pseudoknots allowed" : "secondary only");
       parts.push("beam " + profileValue(structure.cplfoldBeam, cplfoldCatalog(structure).defaults.beamSize));
@@ -1552,16 +1574,18 @@
       ? '<div class="fold-status fold-status-evidence"><strong>COMRADES(ViennaRNA)</strong><p>Each eligible HYB row is folded with RNAcofold. Base-pair frequencies are merged into ranked stems with weak ends trimmed, fitted greedily as hard constraints, then optionally re-fitted in seeded random orders.</p></div>'
       : manualConstraintMode
       ? '<div class="fold-status fold-status-constraints"><strong>Manual hard-pair mode</strong><p>ViennaRNA will enforce the pairs you enter before calculating the MFE. HYB2 Web Lite does not infer these pairs from HYB or RNAcofold evidence.</p></div>'
-      : '<div class="fold-status fold-status-mfe"><strong>Plain minimum-free-energy mode</strong><p>Runs the deployed ViennaRNA WebAssembly engine in a dedicated worker without base-pair constraints.</p></div>';
+      : structure.cplfoldMode === "cofold"
+      ? '<div class="fold-status fold-status-mfe"><strong>RNAcofold · two RNA strands</strong><p>ViennaRNA RNAcofold folds strands A and B together, as <code>RNAcofold --noconv --noPS</code> does: the minimum-free-energy structure of the dimer, with pairs within and between the strands. It runs in a dedicated WebAssembly worker.</p></div>'
+      : '<div class="fold-status fold-status-mfe"><strong>ViennaRNA MFE</strong><p>Folds the sequence alone, without base-pair constraints, in the deployed ViennaRNA WebAssembly engine in a dedicated worker.</p></div>';
     const scope = cplfold
-      ? '<p>The browser runs pure-Python CPLfold without Numba JIT: ' + escape(cplfoldLimitSentence(cplfoldCapacity(structure))) + '. The capacity test estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. In HYB-guided mode, the selected read-support kernel sets the folding bonus. For longer or Numba-accelerated runs, Download local inputs exports the prepared FASTA and, for guided runs, the sparse <code>cplfold-bonus-matrix.tsv</code>. ' + localRun + ' Sequence-only mode requires only the FASTA. CPLfold\'s own code is GPL-3.0-or-later; its LinearFold-derived parser keeps LinearFold\'s terms (see the repository\'s third-party notices).</p><p class="cplfold-runtime-note">CPLfold uses its bundled 37 °C Vienna-mode and pseudoknot energy tables; the ViennaRNA temperature control does not apply. First use loads about 15 MB of same-origin Pyodide and NumPy assets. Results and candidates remain in this tab.</p>' + renderCplfoldLocalCta(guided)
+      ? '<p>The browser runs pure-Python CPLfold without Numba JIT: ' + escape(cplfoldLimitSentence(cplfoldCapacity(structure))) + '. The capacity test estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. The selected read-support kernel sets the folding bonus. For longer or Numba-accelerated runs, Download local inputs exports the prepared FASTA and the sparse <code>cplfold-bonus-matrix.tsv</code>. ' + localRun + ' CPLfold\'s own code is GPL-3.0-or-later; its LinearFold-derived parser keeps LinearFold\'s terms (see the repository\'s third-party notices).</p><p class="cplfold-runtime-note">CPLfold uses its bundled 37 °C Vienna-mode and pseudoknot energy tables; the ViennaRNA temperature control does not apply. First use loads about 15 MB of same-origin Pyodide and NumPy assets. Results and candidates remain in this tab.</p>' + renderCplfoldLocalCta(guided)
       : guidedConstraintMode
-      ? "<p>This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence, ranked F-stem constraints, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring. Pseudoknotted hard constraints are outside ViennaRNA dot-bracket output.</p>"
-      : "<p>Choose COMRADES(ViennaRNA) to derive constraints automatically from loaded HYB records and a mapped reference FASTA. Plain and manual modes remain available for independent sequence folding.</p>";
+      ? "<p>This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence, ranked F-stem constraints, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring. Pseudoknotted hard constraints are outside ViennaRNA dot-bracket output. COMRADES(mfold) runs in HYB2 Desktop.</p>"
+      : "<p>Sequence only folds without HYB evidence, as the control for the guided folds. To use the HYB chimeras, set Evidence to Guided by HYB chimeras: CPLfold or CPLcofold, with COMRADES and IRIS for comparison.</p>";
     return [
       '<details class="structure-about" data-open-key="structure-about"' + openAttr("structure-about") + ">",
       "<summary>About this method</summary>",
-      cplfold ? '<p class="card-note">With CPLfold selected, one-region presets run CPLfold; two-region presets run CPLcofold and preserve the selected reads, alpha, beta and pseudoknot settings. Same-RNA regions are folded as two excised fragments, with a strand break and no intervening reference sequence or artificial spacer.</p>' : '<p class="card-note legacy-workflow-note">ViennaRNA presets use HYB-guided evidence. Short-range uses one region; long-range uses two regions of the same RNA. Intermolecular uses two different RNAs; homodimer uses two copies of one RNA and overlap score ≥ 5. Paired layouts include the original 100 nt spacer.</p>',
+      '<p class="card-note legacy-workflow-note">Each Folding workflow preset sets Evidence, Regions and Algorithm. Short-range folds one region with CPLfold. Long-range (two regions of one RNA), intermolecular (two RNAs) and homodimer (the same region twice, HYB rows with overlap score ≥ 5) fold two regions with CPLcofold. Choose COMRADES as the Algorithm afterwards to compare on the same regions. CPLcofold and RNAcofold fold two regions as two strands, with no reference sequence or spacer between them; COMRADES joins them with the original 100 nt spacer.</p>',
       status,
       '<div class="structure-about-scope">' + scope + "</div>",
       "</details>"
@@ -1636,12 +1660,7 @@
       if (!validKernel) kernelOptions.unshift({ value: "", label: "Choose a supported kernel", disabled: true });
       return [
         '<section class="guided-fold-controls cplfold-controls" aria-label="CPLfold setup">',
-        renderSelectControl("Experimental evidence", "cplfoldEvidence", structure.cplfoldEvidence || "hyb-blocks", [
-          { value: "hyb-blocks", label: "HYB-guided bonus matrix" },
-          { value: "none", label: "Sequence only" }
-        ], "structure-control"),
-        // syncDefaultStructureEvidence chose sequence only: say so, with the way back
-        structure.evidenceFallback && !guided ? '<div class="notice structure-evidence-fallback" role="note"><span>No HYB row lies fully inside the default region (' + range(structure.start, structure.end) + '), so this fold uses the sequence only. Set a region that holds HYB rows to use them.</span><button class="quiet-button" type="button" data-feature-action="structure-use-hyb-evidence">Switch back to HYB evidence</button></div>' : "",
+        // CPLfold and CPLcofold are always guided: a sequence-only fold is ViennaRNA's
         guided ? renderSelectControl("Read support (B_ij)", "cplfoldKernel", validKernel ? kernel : "", kernelOptions, "structure-control") : "",
         guided ? '<p class="card-note">' + (validKernel ? escape(cplfoldKernelNote(kernel)) : "The previously selected kernel is unavailable. Choose a read-support method before folding or exporting a bonus matrix.") + '</p>' : "",
         guided ? '<div class="guided-input-summary' + (assembly && assembly.eligibleRecordCount ? "" : " is-empty") + '"><strong>' + format(assembly ? assembly.eligibleRecordCount : 0) + ' eligible HYB row' + (assembly && assembly.eligibleRecordCount === 1 ? "" : "s") + '</strong><span>overlap_score and collapsed raw-read count are not weights · ' + (structure.cplfoldMode === "cofold" ? "two RNA regions; each read arm maps to one strand" : "single reference region") + '</span></div>' : "",
@@ -1796,13 +1815,11 @@
     if (part === "sequence") {
       return [
         '<section class="guided-fold-controls" aria-label="HYB-guided reference layout">',
-        renderSelectControl("Reference layout", "evidenceLayout", structure.evidenceLayout || "single", [
-          { value: "single", label: "One reference region" },
-          { value: "paired", label: "Two regions + original 100 nt spacer" }
-        ], "structure-control"),
+        // Two regions (the Regions step): joined by the original spacer
         paired ? [
           renderSelectControl("Region 2 RNA", "secondRna", structure.secondRna, rnas.map(function (rna) { return { value: rna, label: rna }; }), "structure-control"),
           '<div class="control-grid">' + renderTextControl("Region 2 start", "secondStart", structure.secondStart, "Start", "structure-control", "number", { min: 1, step: 1 }) + renderTextControl("Region 2 end", "secondEnd", structure.secondEnd, "End", "structure-control", "number", { min: 1, step: 1 }) + "</div>",
+          '<p class="card-note">COMRADES joins region 1 and region 2 with the original 100 nt spacer and folds them as one sequence.</p>',
           '<label class="structure-check"><input type="checkbox" data-feature="structure-control" data-key="homodimerOnly"' + (structure.homodimerOnly ? " checked" : "") + '><span>Use only the original homodimer proxy (same RNA and HYB overlap score ≥ 5)</span></label>'
         ].join("") : "",
         renderEvidenceDatasets(structure, sequenceInfo),
@@ -1864,7 +1881,7 @@
     ].join("");
   }
 
-  const LOCAL_INPUT_ATTRS = ' aria-label="Download local CPLfold inputs" title="Download prepared FASTA for local folding; guided inputs also include the HYB bonus matrix"';
+  const LOCAL_INPUT_ATTRS = ' aria-label="Download local CPLfold inputs" title="Download the prepared FASTA and the HYB bonus matrix for local folding"';
 
   // K2 export menu in the page heading, shown once a result exists; items
   // are [attributes, label] grouped under a heading.
@@ -1957,7 +1974,7 @@
       '<section class="structure-result-panel data-card" aria-labelledby="structure-result-heading">',
       '<div class="card-title-row structure-result-title"><h2 id="structure-result-heading" tabindex="-1">Structure result</h2><span class="card-note">' + escape(displaySequenceLabel(result.label)) + " · " + format(result.sequence.length) + " nt</span></div>",
       renderResultEvidence(result, sequenceInfo),
-      result.cutpoint ? '<p class="card-note"><strong>CPLcofold · two RNA molecules</strong> · A ' + format(result.cutpoint) + ' nt + B ' + format(result.sequence.length - result.cutpoint) + ' nt. Chain break after position ' + format(result.cutpoint) + '; coordinates exclude &amp;. Arc view shows the separate backbones.</p>' : "",
+      result.cutpoint ? '<p class="card-note"><strong>' + (cplfold ? "CPLcofold" : "RNAcofold") + ' · two RNA molecules</strong> · A ' + format(result.cutpoint) + ' nt + B ' + format(result.sequence.length - result.cutpoint) + ' nt. Chain break after position ' + format(result.cutpoint) + '; coordinates exclude &amp;. Arc view shows the separate backbones.</p>' : "",
       result.energyMetadata && result.energyMetadata.energy_kind === "heuristic" ? '<p class="notice notice-warning">Experimental pseudoknot energy (' + escape(result.energyMetadata.energy_model || "Turner/DP") + '). This ranking score is not a validated binding free energy.</p>' : "",
       '<p class="visually-hidden" data-structure-announce aria-live="polite"></p>',
       '<div class="structure-result-grid">',
@@ -2033,6 +2050,8 @@
       ? "CPLfold ran in this browser without its compiled core; see About this method in the setup for the limits and the local run."
       : guided
       ? "This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence, ranked F-stem constraints, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring."
+      : result.algorithm === "RNAcofold"
+      ? "ViennaRNA RNAcofold fold of strands A and B in a local WebAssembly worker, as RNAcofold --noconv --noPS: the sequence only, no HYB evidence."
       : "ViennaRNA minimum-free-energy fold in a local WebAssembly worker" + (Number(result.constraintCount) > 0 ? ", with the hard pairs you entered." : ", without base-pair constraints.");
     return '<details class="structure-computed" data-open-key="structure-computed"' + openAttr("structure-computed") + "><summary>How this was computed</summary>" + body + '<p class="card-note">' + escape(scope) + "</p></details>";
   }
@@ -2041,12 +2060,12 @@
     return ["folded", "arc", "radial", "circular", "matrix"].indexOf(value) > -1 ? value : "folded";
   }
 
-  function structureViewCopy(viewMode, cplfold, allowPseudoknot, guided, manualConstrained) {
+  function structureViewCopy(viewMode, cplfold, allowPseudoknot, guided, manualConstrained, algorithm) {
     const descriptions = {
       folded: "The RNA backbone is laid out as a folded molecule: paired bases form stem rungs while unpaired bases open into hairpin and internal loops.",
       arc: cplfold
         ? (allowPseudoknot ? "Arc layers distinguish nested phase-1 pairs from crossing pseudoknot pairs; opacity reflects pair support when enabled." : "The arc diagram shows the pseudoknot-free Phase-1 candidate; opacity reflects pair support when enabled.")
-        : (guided ? "Arc colour intensity shows aggregated RNAcofold evidence; fitted constraint arcs are thicker." : (manualConstrained ? "Manual hard-pair arcs are thicker and marked in the base-pair list; all other arcs minimise free energy around them." : "Each arc represents a ViennaRNA MFE base pair.")),
+        : (guided ? "Arc colour intensity shows aggregated RNAcofold evidence; fitted constraint arcs are thicker." : (manualConstrained ? "Manual hard-pair arcs are thicker and marked in the base-pair list; all other arcs minimise free energy around them." : (algorithm === "RNAcofold" ? "Each arc represents an RNAcofold MFE base pair; A | B marks where strand A ends." : "Each arc represents a ViennaRNA MFE base pair."))),
       radial: "Pairs are drawn from the sequence perimeter toward the centre so long-range contacts and nested depth can be compared at a glance.",
       circular: "The sequence runs around a circular backbone; chords make long-range and crossing contacts easy to scan.",
       matrix: "The symmetric contact matrix places each base pair at its two sequence coordinates; mirrored points preserve the full interaction map."
@@ -2082,7 +2101,7 @@
     return '<section class="structure-diagram-panel"><div class="structure-diagram-heading"><div class="structure-diagram-title"><h3>' + (editing ? "Drawing editor" : titles[activeView]) + '</h3></div><div class="structure-view-toolbar"><span class="structure-view-label">View</span><div class="structure-view-options" role="group" aria-label="RNA structure visualization view">' + options.map(function (option) {
       const active = option[0] === activeView && !editing;
       return '<button class="structure-view-option' + (active ? " is-active" : '') + '" type="button" data-feature-action="set-structure-view" data-view-mode="' + option[0] + '" aria-pressed="' + (active ? "true" : "false") + '">' + option[1] + "</button>";
-    }).join("") + (window.Hyb2StructureEditor ? '<button class="structure-view-option' + (editing ? " is-active" : "") + '" type="button" data-feature-action="toggle-structure-editor" aria-pressed="' + (editing ? "true" : "false") + '">' + (editing ? "Close editor" : "Edit drawing") + '</button>' : '') + '</div></div><p class="structure-diagram-copy"><span class="method-badge">' + escape(result.algorithm || (cplfold ? "CPLfold" : "ViennaRNA MFE")) + '</span> ' + (editing ? "Edit a copy of this prediction: layout, colours, labels and pairs. The prediction and its exports stay unchanged." : structureViewCopy(activeView, cplfold, allowPseudoknot, guided, manualConstrained) + " " + inspectorInstruction) + '</p></div><div class="structure-diagram" role="group" data-structure-diagram data-view-mode="' + activeView + '" aria-label="' + labels[activeView] + '"></div></section>';
+    }).join("") + (window.Hyb2StructureEditor ? '<button class="structure-view-option' + (editing ? " is-active" : "") + '" type="button" data-feature-action="toggle-structure-editor" aria-pressed="' + (editing ? "true" : "false") + '">' + (editing ? "Close editor" : "Edit drawing") + '</button>' : '') + '</div></div><p class="structure-diagram-copy"><span class="method-badge">' + escape(result.algorithm || (cplfold ? "CPLfold" : "ViennaRNA MFE")) + '</span> ' + (editing ? "Edit a copy of this prediction: layout, colours, labels and pairs. The prediction and its exports stay unchanged." : structureViewCopy(activeView, cplfold, allowPseudoknot, guided, manualConstrained, result.algorithm) + " " + inspectorInstruction) + '</p></div><div class="structure-diagram" role="group" data-structure-diagram data-view-mode="' + activeView + '" aria-label="' + labels[activeView] + '"></div></section>';
   }
 
   // E9: five columns that fit the side column; the dot-bracket is the row's
@@ -2193,16 +2212,19 @@
     const pair = (result.pairs || []).find(function (entry) { return entry.left === position || entry.right === position; });
     const base = result.sequence.charAt(position - 1);
     if (!pair) {
-      return '<section class="structure-nucleotide-inspector"><span class="drawer-kicker">Nucleotide ' + format(position) + '</span><strong>' + escape(base) + '</strong><p>Unpaired in this ' + (result.engine === "IRIS" ? "IRIS ensemble member" : cplfold ? "CPLfold candidate" : "ViennaRNA MFE structure") + '.</p></section>';
+      return '<section class="structure-nucleotide-inspector"><span class="drawer-kicker">Nucleotide ' + format(position) + '</span><strong>' + escape(base) + '</strong><p>Unpaired in this ' + (result.engine === "IRIS" ? "IRIS ensemble member" : cplfold ? "CPLfold candidate" : result.algorithm === "RNAcofold" ? "RNAcofold structure" : "ViennaRNA MFE structure") + '.</p></section>';
     }
     const partner = pair.left === position ? pair.right : pair.left;
     const partnerBase = pair.left === position ? pair.rightBase : pair.leftBase;
     return '<section class="structure-nucleotide-inspector"><span class="drawer-kicker">Nucleotide ' + format(position) + '</span><strong>' + escape(base) + '</strong><p>Paired with ' + format(partner) + " " + escape(partnerBase) + " · " + escape(pair.type) + (cplfold ? " · " + escape(pair.layer || "primary") + " layer" : "") + "</p></section>";
   }
 
+  // Two regions as strands A and B: CPLcofold (guided by the HYB rows) or
+  // RNAcofold (the sequence only).
   function getCofoldSequence(state) {
     const structure = state.structure;
-    const guided = structure.cplfoldEvidence === "hyb-blocks";
+    const guided = structure.engine === "cplfold" && structure.cplfoldEvidence === "hyb-blocks";
+    const algorithm = guided ? "CPLcofold" : "RNAcofold";
     const cofoldNotes = [];
     try {
       let first, second, assembly = null, label = "Pasted RNA A + RNA B";
@@ -2262,11 +2284,11 @@
           first = strands[0]; second = strands[1];
         }
       } else {
-        throw new Error("CPLcofold requires two reference regions or two pasted RNA strands; a chimeric HYB record is not a two-molecule input.");
+        throw new Error(algorithm + " requires two reference regions or two pasted RNA strands; a chimeric HYB record is not a two-molecule input.");
       }
       const minimum = globalThis.Hyb2FoldText.minSequenceNt;
       if (first.length < minimum || second.length < minimum) {
-        throw new Error(`CPLcofold requires at least ${minimum} nt in each RNA A and RNA B sequence.`);
+        throw new Error(`${algorithm} requires at least ${minimum} nt in each RNA A and RNA B sequence.`);
       }
       return {
         sequence: first + second, displaySequence: first + "&" + second,
@@ -2330,12 +2352,13 @@
     if (structure.status === "running" && structure.runningSequenceInfo) {
       return structure.runningSequenceInfo;
     }
-    if (structure.engine === "cplfold" && structure.cplfoldMode === "cofold") {
+    const steps = window.Hyb2Data.structureSteps(structure);
+    if (steps.algorithm === "cplcofold" || steps.algorithm === "rnacofold") {
       return getCofoldSequence(state);
     }
     if (structure.source === "reference") {
       if (!state.reference) {
-        return { sequence: "", label: "", error: "No reference FASTA is loaded: add one in the Data panel" + (structure.engine === "iris" || (structure.engine === "cplfold" && structure.cplfoldEvidence === "hyb-blocks") ? ", or use ViennaRNA or sequence-only CPLfold to fold a HYB record or a pasted sequence." : ", or set Sequence source to a HYB record or a pasted sequence.") };
+        return { sequence: "", label: "", error: "No reference FASTA is loaded: add one in the Data panel" + (steps.evidence === "guided" ? ", or set Evidence to Sequence only to fold a HYB record or a pasted sequence." : ", or set Sequence source to a HYB record or a pasted sequence.") };
       }
       // Reference sequences (DataProvider.getSequence) and, for HYB-guided
       // modes, every row's arms (DataProvider.getArms) are prefetched by
@@ -2821,23 +2844,27 @@
     }
   }
 
-  // The untouched default setup must be runnable. CPLfold's default evidence
-  // is the HYB block bonus matrix; when the default region (not one the user
-  // set) holds no eligible HYB row, the default becomes sequence only and the
-  // setup says so (structure.evidenceFallback, drawn by renderCplfoldSetup).
-  // That is a default too: it returns to HYB blocks when the region or the
-  // loaded datasets change, and is then checked again. An evidence mode the
-  // user picked (structure.evidenceChosen: any change of the mode not made
-  // here), a "HYB evidence from" choice and a region the user set are left
-  // alone, so those keep the disabled Predict and its reason; so is a setup
-  // that holds a result. Call it with the page's data current (app.js
-  // render): it returns true when the mode changed and other data is needed.
+  // The untouched default setup must be runnable. Its default is Evidence
+  // guided by the HYB chimeras, one region, CPLfold; when the default region
+  // (not one the user set) holds no eligible HYB row, Evidence becomes
+  // Sequence only (ViennaRNA MFE) and the setup says so
+  // (structure.evidenceFallback, drawn under the Evidence step). That is a
+  // default too: it returns to the HYB evidence when the region or the
+  // loaded datasets change, and is then checked again. Evidence the user
+  // picked (structure.evidenceChosen: any change of the Evidence step not
+  // made here, a preset included), a "HYB evidence from" choice and a region
+  // the user set are left alone, so those keep the disabled Predict and its
+  // reason; so is a setup that holds a result. Call it with the page's data
+  // current (app.js render): it returns true when the evidence changed and
+  // other data is needed.
   function syncDefaultStructureEvidence(state) {
     const structure = state && state.structure;
     if (!structure || structure.status === "running") {
       return false;
     }
-    const mode = structure.cplfoldEvidence === "none" ? "none" : "hyb-blocks";
+    const steps = window.Hyb2Data.structureSteps(structure);
+    // the values evidenceSeen has always held
+    const mode = steps.evidence === "sequence" ? "none" : "hyb-blocks";
     if (structure.evidenceSeen !== undefined && structure.evidenceSeen !== mode) {
       structure.evidenceChosen = true;
       delete structure.evidenceFallback;
@@ -2848,23 +2875,24 @@
     }
     syncStoredCplfoldCapacity(structure);
     capDefaultStructureRegion(structure);
-    const untouched = structure.engine === "cplfold" && structure.cplfoldMode !== "cofold" && structure.source === "reference" &&
-      structure.defaultRegionEnd != null && (structure.evidenceDatasets || "all") === "all";
+    const defaultRegion = structure.source === "reference" && structure.defaultRegionEnd != null &&
+      (structure.evidenceDatasets || "all") === "all";
     const signature = [structure.rna, structure.start, structure.end,
       (state.datasets || []).map(function (dataset) { return dataset && dataset.id; }).join(",")].join("|");
     if (structure.evidenceFallback) {
-      if (untouched && structure.evidenceFallback === signature) {
+      // Regions and Algorithm may change under the fallback; the region may not
+      if (defaultRegion && structure.evidenceFallback === signature) {
         return false;
       }
       delete structure.evidenceFallback;
       if (mode !== "none" || structure.source !== "reference") {
         return false;
       }
-      structure.cplfoldEvidence = "hyb-blocks";
+      window.Hyb2Data.setStructureSteps(structure, { evidence: "guided" });
       structure.evidenceSeen = "hyb-blocks";
       return true;
     }
-    if (!untouched || mode !== "hyb-blocks") {
+    if (!defaultRegion || steps.evidence !== "guided" || steps.algorithm !== "cplfold") {
       return false;
     }
     // rows were found for this region and this evidence before
@@ -2880,7 +2908,7 @@
       structure.evidenceChecked = checked;
       return false;
     }
-    structure.cplfoldEvidence = "none";
+    window.Hyb2Data.setStructureSteps(structure, { evidence: "sequence" });
     structure.evidenceSeen = "none";
     structure.evidenceFallback = signature;
     return true;

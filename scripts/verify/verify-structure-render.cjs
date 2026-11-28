@@ -8,6 +8,8 @@ const vm = require("node:vm");
 const repository = path.resolve(__dirname, "..", "..");
 const workerInstances = [];
 let workerRequests = 0;
+// a value made in the page's context, comparable with this one's
+const plain = value => JSON.parse(JSON.stringify(value));
 
 function FakeWorker(url, options) {
   this.url = url;
@@ -275,9 +277,10 @@ assert.equal(guidedSequence.sequence, "GGGGGGAAAACCCCCC");
 assert.equal(guidedSequence.assembly.evidenceArms.length, 1);
 const guidedSetupHtml = context.window.Hyb2Pages.renderStructure(guidedState);
 assert.match(guidedSetupHtml, /COMRADES\(ViennaRNA\)/);
-assert.match(guidedSetupHtml, /RNAcofold \+ constrained RNAfold · Browser/);
+assert.match(guidedSetupHtml, /<span class="method-badge">COMRADES\(ViennaRNA\) · for comparison · Browser<\/span>/);
+assert.match(guidedSetupHtml, /data-key="stepAlgorithm"><option value="cplfold">CPLfold · Hyb2<\/option><option value="comrades" selected>COMRADES · for comparison<\/option><option value="iris">IRIS · for comparison<\/option><\/select>/);
 assert.match(guidedSetupHtml, /1 eligible HYB row/);
-assert.match(guidedSetupHtml, /Run HYB-guided ensemble/);
+assert.match(guidedSetupHtml, /Run COMRADES ensemble/);
 assert.match(guidedSetupHtml, /1,000 · original cluster scale/);
 assert.match(guidedSetupHtml, /Randomisation seed/);
 
@@ -304,9 +307,75 @@ for (const cplfoldMode of ["single", "cofold"]) {
     assert.doesNotMatch(preview, /stem constraints|observation|ensemble/);
   }
 }
-const noEvidence = assemblyPreview({ engine: "cplfold", cplfoldMode: "cofold", cplfoldEvidence: "none" });
+// RNAcofold: two regions from the sequence only
+const noEvidence = assemblyPreview({ engine: "viennarna", constraintMode: "none", cplfoldMode: "cofold", evidenceLayout: "paired" });
 assert.match(noEvidence, /No HYB evidence in this input/);
 assert.doesNotMatch(noEvidence, /RNAcofold|eligible HYB|bonus matrix/);
+
+// The three setup steps. Evidence and Regions decide the Algorithm offered,
+// default first; the sequence sources and the Folding mode follow them.
+{
+  const data = context.window.Hyb2Data;
+  const offered = {
+    "guided|one": [["cplfold", "CPLfold · Hyb2"], ["comrades", "COMRADES · for comparison"], ["iris", "IRIS · for comparison"]],
+    "guided|two": [["cplcofold", "CPLcofold · Hyb2"], ["comrades", "COMRADES · for comparison"]],
+    "sequence|one": [["vienna", "ViennaRNA MFE"]],
+    "sequence|two": [["rnacofold", "RNAcofold"]]
+  };
+  const sources = { "guided|one": ["reference"], "guided|two": ["reference"],
+    "sequence|one": ["reference", "record", "paste"], "sequence|two": ["reference", "paste"] };
+  const options = (html, key) => Array.from(html.match(new RegExp('data-key="' + key + '">(.*?)</select>'))[1]
+    .matchAll(/<option value="([^"]*)"( selected)?[^>]*>([^<]*)<\/option>/g), match => [match[1], match[3], !!match[2]]);
+  const selected = (html, key) => options(html, key).filter(option => option[2]).map(option => option[0]);
+  for (const [key, algorithms] of Object.entries(offered)) {
+    const [evidence, regions] = key.split("|");
+    for (const [algorithm] of algorithms) {
+      const target = { ...guidedState, structure: { ...guidedState.structure } };
+      assert.deepEqual(plain(data.setStructureSteps(target.structure, { evidence, regions, algorithm })), { evidence, regions, algorithm });
+      const html = context.window.Hyb2Pages.renderStructure(providerView(target));
+      assert.deepEqual(plain(data.structureSteps(target.structure)), { evidence, regions, algorithm }, key + ": drawing keeps the steps");
+      assert.deepEqual([selected(html, "stepEvidence"), selected(html, "stepRegions"), selected(html, "stepAlgorithm")],
+        [[evidence], [regions], [algorithm]], key + " " + algorithm);
+      assert.deepEqual(options(html, "stepAlgorithm").map(option => [option[0], option[1]]), algorithms, key + ": the algorithms offered");
+      assert.deepEqual(options(html, "source").map(option => option[0]), sources[key], key + ": the sequence sources");
+      assert.equal(/data-key="constraintMode"/.test(html), algorithm === "vienna", key + " " + algorithm + ": Folding mode is ViennaRNA MFE's");
+      assert.doesNotMatch(html, /data-key="(?:engine|cplfoldMode|cplfoldEvidence|evidenceLayout)"/, "the old engine, layout and evidence selects are gone");
+    }
+    // the default algorithm replaces one the new steps do not offer
+    const form = { ...guidedState.structure };
+    data.setStructureSteps(form, { evidence: evidence === "guided" ? "sequence" : "guided", regions });
+    data.setStructureSteps(form, { evidence });
+    assert.equal(data.structureSteps(form).algorithm, algorithms[0][0], key + ": the default algorithm");
+  }
+  // an algorithm the new steps still offer is kept: COMRADES on one region, then two
+  const comrades = { ...guidedState.structure };
+  assert.deepEqual(plain(data.setStructureSteps(comrades, { regions: "two" })), { evidence: "guided", regions: "two", algorithm: "comrades" });
+  assert.deepEqual([comrades.engine, comrades.constraintMode, comrades.evidenceLayout], ["viennarna", "hyb-guided", "paired"]);
+  // no sequence-only CPLfold or CPLcofold, whatever is asked
+  for (const algorithm of ["cplfold", "cplcofold"]) for (const regions of ["one", "two"]) {
+    const form = { ...guidedState.structure };
+    const steps = data.setStructureSteps(form, { evidence: "sequence", regions, algorithm });
+    assert.deepEqual([steps.algorithm, form.engine], [regions === "one" ? "vienna" : "rnacofold", "viennarna"]);
+  }
+}
+
+// A form saved before the three setup steps with sequence-only CPLfold or
+// CPLcofold (cplfoldEvidence "none") opens and folds as Sequence only:
+// ViennaRNA MFE for one region, RNAcofold for two.
+for (const [cplfoldMode, regions, algorithm, label, request] of [["single", "one", "vienna", "ViennaRNA MFE", "fold"],
+  ["cofold", "two", "rnacofold", "RNAcofold", "cofold"]]) {
+  const saved = { ...guidedState, structure: { ...guidedState.structure, engine: "cplfold", constraintMode: "none",
+    cplfoldMode, cplfoldEvidence: "none", evidenceLayout: "single" } };
+  const html = context.window.Hyb2Pages.renderStructure(providerView(saved));
+  assert.deepEqual(plain(context.window.Hyb2Data.structureSteps(saved.structure)), { evidence: "sequence", regions, algorithm });
+  assert.match(html, /data-key="stepEvidence">(?:(?!<\/select>).)*<option value="sequence" selected>Sequence only/);
+  assert.match(html, new RegExp('data-key="stepAlgorithm"><option value="' + algorithm + '" selected>' + label + "</option></select>"));
+  assert.doesNotMatch(html, /data-key="cplfoldKernel"|Predict CPLc?o?fold|CPLc?o?fold · Hyb2 · Browser/, "no sequence-only CPLfold");
+  assert.equal(saved.structure.engine, "viennarna");
+  assert.equal(context.window.Hyb2Structure.predict(providerView(saved), { render() {}, showToast() {} }), true);
+  assert.equal(saved.structureWorker.message.type, request);
+  context.window.Hyb2Structure.cancel(saved);
+}
 
 const guidedWorkersBefore = workerInstances.length;
 assert.equal(context.window.Hyb2Structure.predict(guidedState, {
@@ -458,8 +527,9 @@ Object.assign(cplfoldState.structure, {
 });
 providerView(cplfoldState);
 const cplfoldSetup = context.window.Hyb2Pages.renderStructure(cplfoldState);
-assert.match(cplfoldSetup, /CPLfold \+ Pyodide · Browser/);
-assert.match(cplfoldSetup, /HYB-guided bonus matrix/);
+assert.match(cplfoldSetup, /<span class="method-badge">CPLfold · Hyb2 · Browser \(Pyodide\)<\/span>/);
+assert.match(cplfoldSetup, /data-key="stepAlgorithm"><option value="cplfold" selected>CPLfold · Hyb2<\/option>/);
+assert.doesNotMatch(cplfoldSetup, /data-key="cplfoldEvidence"/, "CPLfold is always guided: no sequence-only evidence control");
 assert.match(cplfoldSetup, /Allow pseudoknots/);
 assert.match(cplfoldSetup, /Secondary structure only/);
 assert.match(cplfoldSetup, /value="true"[^>]*data-key="cplfoldAllowPseudoknot"[^>]* checked/);
@@ -468,7 +538,7 @@ assert.match(cplfoldSetup, /Predict CPLfold candidates/);
 assert.match(cplfoldSetup, /Baseline 75 nt/);
 assert.match(cplfoldSetup, /data-feature-action="probe-cplfold-capacity"/);
 assert.match(cplfoldSetup, /data-feature-action="download-local-cplfold-input"[^>]*>Download local inputs/);
-assert.match(cplfoldSetup, /title="Download prepared FASTA for local folding; guided inputs also include the HYB bonus matrix"/);
+assert.match(cplfoldSetup, /title="Download the prepared FASTA and the HYB bonus matrix for local folding"/);
 assert.match(cplfoldSetup, /Run longer sequences locally/);
 assert.match(cplfoldSetup, /href="\.\/local-cplfold\.html"[^>]*target="_blank"/);
 assert.doesNotMatch(cplfoldSetup, /python3\.11 -m venv \.venv-cplfold/);
@@ -720,11 +790,16 @@ assert.equal(pseudoknotFreeReport.prediction.pseudoknotAllowed, false);
 assert.equal(pseudoknotFreeReport.methodScope.cplfoldPseudoknotPrediction, false);
 
 const oversizedCplfoldState = structureState("none", "");
+oversizedCplfoldState.records = [{ id: "read-1", index: 0, rnaOne: "RNA_A", rnaOneStart: 1, rnaOneEnd: 6,
+  rnaTwo: "RNA_A", rnaTwoStart: 60, rnaTwoEnd: 66, isHomodimer: false }];
+oversizedCplfoldState.fasta = { mapping: { RNA_A: "RNA_A" }, sequences: [{ id: "RNA_A", sequence: "A".repeat(76) }] };
 Object.assign(oversizedCplfoldState.structure, {
   engine: "cplfold",
-  source: "paste",
-  pastedSequence: "A".repeat(76),
-  cplfoldEvidence: "none",
+  source: "reference",
+  rna: "RNA_A",
+  start: "1",
+  end: "76",
+  cplfoldEvidence: "hyb-blocks",
   cplfoldBeam: "20",
   cplfoldMaxPhase1: "1",
   cplfoldEnergyDelta: "5",
@@ -732,6 +807,7 @@ Object.assign(oversizedCplfoldState.structure, {
   cplfoldAlpha: "0.5",
   cplfoldBeta: "0"
 });
+providerView(oversizedCplfoldState);
 const workersBeforeOversizedCplfold = workerInstances.length;
 assert.equal(context.window.Hyb2Structure.predict(oversizedCplfoldState, controllerApiForCplfold()), false);
 assert.equal(workerInstances.length, workersBeforeOversizedCplfold);
@@ -910,7 +986,9 @@ try {
 
 // Task input policy is source-specific, after normalization. The prepared
 // engine accepts shorter input; the form must not invent a fourth cutoff.
-function lengthState(source, length, engine = "cplfold", bounds = {}) {
+// A HYB record or a pasted sequence folds from the sequence only, with
+// ViennaRNA MFE; so does a form saved as sequence-only CPLfold ("cplfold").
+function lengthState(source, length, engine = "viennarna", bounds = {}) {
   const target = structureState("none", "");
   Object.assign(target.structure, {engine, source, cplfoldMode: "single", cplfoldEvidence: "none",
     pastedSequence: ">mine\r1 " + "g".repeat(length) + "\u0085", rna: "A", start: "", end: "", ...bounds});
@@ -935,6 +1013,7 @@ function checkInputLength(target, accepted, expectedLength, minimum) {
   assert.equal(context.window.Hyb2Structure.predict(target, controllerApi), accepted, info.error);
   assert.equal(workerRequests, before + Number(accepted));
   if (accepted) {
+    assert.deepEqual([target.structure.engine, target.structureWorker.message.type], ["viennarna", "fold"]);
     assert.equal(target.structureWorker.message.sequence, info.sequence);
     context.window.Hyb2Structure.cancel(target);
   } else assert.equal(workerInstances.length, instances);
@@ -961,7 +1040,7 @@ try {
   windowRules.minPastedNt = originalMinima.minPastedNt;
   windowRules.minSequenceNt = 11;
   checkInputLength(lengthState("paste", 5), true, 5);
-  checkInputLength(lengthState("reference", 12, "cplfold", {start: "2", end: "11"}), true, 10);
+  checkInputLength(lengthState("reference", 12, "viennarna", {start: "2", end: "11"}), true, 10);
   for (const source of ["record", "reference"]) {
     checkInputLength(lengthState(source, 10), false, 10, 11);
     checkInputLength(lengthState(source, 11), true, 11);
@@ -1065,7 +1144,9 @@ function providerView(target) {
   const fasta = target.fasta || null;
   const records = target.records || [];
   const structure = target.structure || {};
-  const guided = structure.engine === "cplfold" ? structure.cplfoldEvidence === "hyb-blocks" : structure.constraintMode === "hyb-guided";
+  // as page-data.js loads it
+  const guided = structure.engine === "iris" ||
+    (structure.engine === "cplfold" ? structure.cplfoldEvidence === "hyb-blocks" : structure.constraintMode === "hyb-guided");
   const rnas = [structure.rna, structure.secondRna].filter(function (rna, index, list) { return rna && list.indexOf(rna) === index; });
   const mapped = {};
   Object.keys(fasta && fasta.mapping || {}).forEach(function (rna) {

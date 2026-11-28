@@ -53,7 +53,7 @@ type foldEngine struct {
 }
 
 func engineSettings(engine string) foldEngine {
-	if engine == engineVienna { // request/wire name differs from the catalog key
+	if engine == engineVienna || engine == engineRNAcofold { // ViennaRNA's settings, under another catalog key
 		engine = "vienna"
 	}
 	return stKernels.Engines[engine]

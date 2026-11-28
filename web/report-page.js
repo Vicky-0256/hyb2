@@ -737,12 +737,19 @@
       : null;
     const source = ready ? (structureReportData && structureReportData.source || {}) : {};
     const prediction = ready ? (structureReportData && structureReportData.prediction || {}) : {};
-    // A two-region fold (CPLcofold strands A and B) lists both regions; before
-    // a result exists the Setup shows the two regions currently chosen.
+    // A two-region fold (CPLcofold or RNAcofold strands A and B, or the
+    // COMRADES layout) lists both regions; before a result exists the Setup
+    // shows the algorithm and the regions currently chosen (analysis-data.js
+    // structureSteps).
+    const steps = !ready && window.Hyb2Data && typeof window.Hyb2Data.structureSteps === "function"
+      ? window.Hyb2Data.structureSteps(structure) : null;
     const fromReference = !structure.source || structure.source === "reference";
     const regions = ready ? (window.Hyb2Results && window.Hyb2Results.structureRegions ? window.Hyb2Results.structureRegions(result) : null)
-      : (structure.engine === "cplfold" && structure.cplfoldMode === "cofold" && structure.source === "reference"
+      : ((steps ? steps.regions === "two" : structure.engine === "cplfold" && structure.cplfoldMode === "cofold") && structure.source === "reference"
         ? [{ rna: structure.rna, start: structure.start, end: structure.end }, { rna: structure.secondRna, start: structure.secondStart, end: structure.secondEnd }] : null);
+    const plannedEngine = steps
+      ? { cplfold: "CPLfold", cplcofold: "CPLcofold", comrades: "COMRADES(ViennaRNA)", iris: "IRIS", vienna: "ViennaRNA MFE", rnacofold: "RNAcofold" }[steps.algorithm]
+      : (structure.engine === "cplfold" ? (structure.cplfoldMode === "cofold" ? "CPLcofold" : "CPLfold") : "ViennaRNA WebAssembly");
     return section(
       "structure",
       "RNA Structure",
@@ -751,7 +758,8 @@
       [
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Setup</h3>' + definitionList([
-          ["Engine", result && result.engine || (structure.engine === "cplfold" ? (structure.cplfoldMode === "cofold" ? "CPLcofold" : "CPLfold") : "ViennaRNA WebAssembly")],
+          // ViennaRNA runs RNAcofold for two sequence-only regions
+          ["Engine", result && result.engine ? result.engine + (result.algorithm === "RNAcofold" ? " · RNAcofold" : "") : plannedEngine],
           ["Source", structure.source || "Not selected"],
           // a pasted sequence or a HYB record has no reference RNA and range
           regions ? ["Region 1 RNA", regions[0].rna || "-", true] : ["RNA", fromReference && structure.rna || "-", true],
@@ -1605,7 +1613,8 @@
       start: structure.start || null,
       end: structure.end || null,
       constraintMode: structure.constraintMode || "none",
-      cplfoldEvidence: structure.cplfoldEvidence || null,
+      // CPLfold's setting only (always "hyb-blocks" now): a ViennaRNA or IRIS setup has none
+      cplfoldEvidence: structure.engine === "cplfold" ? structure.cplfoldEvidence || null : null,
       cplfoldAllowPseudoknot: structure.engine === "cplfold" ? globalThis.Hyb2CplfoldSettings.formTopology(structure) : null
     };
   }

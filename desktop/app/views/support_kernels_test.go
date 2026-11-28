@@ -94,9 +94,7 @@ func TestStructureViennaCatalogDefaults(t *testing.T) {
 	if p.temperature != 29.5 || p.minLoop != 5 || p.stems != 2 || p.randomFolds != 1 {
 		t.Fatalf("initial settings: %g, %g, %g, %g", p.temperature, p.minLoop, p.stems, p.randomFolds)
 	}
-	if err := tt.Click("COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras"); err != nil {
-		t.Fatal(err)
-	}
+	stPick(t, tt, engineComrades, false)
 	p.advancedOpen, p.mode, p.windows, p.stems = true, "windows", "2800-3300", 75
 	if pl := p.plan(); !slices.Contains(pl.problems, "Ranked stem constraints must be an integer from 1 to 50.") {
 		t.Fatalf("stale stem count not rejected: %v", pl.problems)

@@ -2,9 +2,11 @@ package views
 
 // ⑤ Structure, the ViennaRNA engines of the web RNA Structure page: the
 // ViennaRNA MFE mode (temperature, minimum hairpin loop, manual hard base
-// pairs; engine "viennarna", pipeline/hyb2analysis/vienna.py) and COMRADES
-// (ViennaRNA), guided by RNAcofold of the chimeras (engine "comrades",
-// pipeline/hyb2analysis/comrades.py), each run as a structure task.
+// pairs; engine "viennarna", pipeline/hyb2analysis/vienna.py), RNAcofold of
+// two regions from their sequences alone (engine "viennarna", mode
+// "cofold") and COMRADES (ViennaRNA), guided by RNAcofold of the chimeras
+// (engine "comrades", pipeline/hyb2analysis/comrades.py), each run as a
+// structure task.
 
 import (
 	"fmt"
@@ -22,6 +24,9 @@ const (
 	engineCPLfold   = "cplfold"
 	engineCPLcofold = "cplcofold"
 	engineVienna    = "viennarna"
+	// engineRNAcofold is the form's RNAcofold of two regions; its task is
+	// engine engineVienna in mode "cofold".
+	engineRNAcofold = "rnacofold"
 	engineComrades  = "comrades"
 	// the COMRADES folding programs (comrades.py FOLD_PROGRAMS)
 	foldViennaRNA   = "viennarna"
@@ -102,6 +107,31 @@ func (p *structurePage) viennaPlan(pl *foldPlan) {
 		}
 	}
 	viennaMemory(pl)
+}
+
+// rnacofoldPlan: RNAcofold of the plan's two strands, two regions or two
+// pasted sequences, from their sequences alone (vienna.py cofold).
+func (p *structurePage) rnacofoldPlan(pl *foldPlan) {
+	engine, mode := engineVienna, "cofold"
+	pl.req.Engine, pl.req.Mode, pl.pk = &engine, &mode, false
+	r := engineSettings(engineRNAcofold).Ranges
+	r["temperature"].check(pl, "Temperature", p.temperature, false)
+	r["minLoopSize"].check(pl, "Minimum hairpin loop", p.minLoop, true)
+	pl.req.Parameters = map[string]any{"temperature": p.temperature, "min_loop": int(p.minLoop)}
+	pl.limits = append(pl.limits, "RNAcofold folds the two strands from their sequences alone: the chimeric reads are not used.",
+		"No pseudoknots: RNAcofold returns a nested structure.")
+	if len(pl.lengths) != 2 {
+		return
+	}
+	lengths := pl.lengths
+	if n := lengths[0] + lengths[1]; n > stViennaMaxNT {
+		pl.problems = append(pl.problems, fmt.Sprintf("Both strands are %s nt; RNAcofold folds at most %s nt in all.",
+			FormatNumber(int64(n)), FormatNumber(stViennaMaxNT)))
+	}
+	// the memory of the joined fold; the form shows the two strands
+	pl.lengths = []int{lengths[0] + lengths[1]}
+	viennaMemory(pl)
+	pl.lengths = lengths
 }
 
 // viennaMemory: one window at a time, quadratic in its length.
@@ -289,8 +319,11 @@ func (p *structurePage) viennaAdvanced(c *ui.Context) {
 	changed := p.viennaSettingsChanged()
 	comrades := p.engine == engineComrades
 	title := "ViennaRNA settings"
-	if comrades {
+	switch p.engine {
+	case engineComrades:
 		title = "COMRADES settings"
+	case engineRNAcofold:
+		title = "RNAcofold settings"
 	}
 	ui.Collapsible(c.Key("st-vienna"), title, &p.advancedOpen, func() {
 		ui.Column(c).Gap(Space3).Padding(6, 0, 0, 0).Children(func() {
@@ -346,10 +379,12 @@ func (p *structurePage) viennaAdvanced(c *ui.Context) {
 		ui.Text(c, summary).FontSize(FontSmall).TextColor(color)
 		return
 	}
-	Field(c, "Hard base pairs (optional): i-j, one per line, RNA positions", func() {
-		ui.TextArea(c.Key("st-hard"), &p.hardPairs).Lines(2, 6).Font("monospace").Placeholder("e.g.\n120-188").Label("Hard base pairs")
-		ui.Text(c, "Each pair is enforced: A-U, G-C or G-U, not crossing, at least the minimum loop apart.").FontSize(FontSmall).TextColor(t.TextMuted)
-	})
+	if p.engine == engineVienna { // ViennaRNA MFE of one region
+		Field(c, "Hard base pairs (optional): i-j, one per line, RNA positions", func() {
+			ui.TextArea(c.Key("st-hard"), &p.hardPairs).Lines(2, 6).Font("monospace").Placeholder("e.g.\n120-188").Label("Hard base pairs")
+			ui.Text(c, "Each pair is enforced: A-U, G-C or G-U, not crossing, at least the minimum loop apart.").FontSize(FontSmall).TextColor(t.TextMuted)
+		})
+	}
 	summary := fmt.Sprintf("%g °C · minimum loop %d", p.temperature, int(p.minLoop))
 	color := t.TextMuted
 	if changed {

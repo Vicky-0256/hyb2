@@ -59,7 +59,9 @@ function harness() {
       if (!value || !appState) return;
       const add = (tag, type, dataset, fieldValue, id) => this.controls.push(new Control(this, tag, type, dataset, fieldValue, id));
       for (const key of ["start", "end"]) add("input", "number", {feature: "structure-control", key}, appState.structure[key]);
-      for (const key of ["workflow", "engine"]) add("select", "select-one", {feature: "structure-control", key}, appState.structure[key]);
+      add("select", "select-one", {feature: "structure-control", key: "workflow"}, appState.structure.workflow);
+      // the Algorithm step: a control, not a form field (analysis-data.js structureSteps)
+      add("select", "select-one", {feature: "structure-control", key: "stepAlgorithm"}, context.Hyb2Data.structureSteps(appState.structure).algorithm);
       add("button", "button", {featureAction: "test-action"});
       add("summary", "", {});
       for (const action of ["choose-hyb", "choose-fasta", "add-fasta"]) add("button", "button", {action});
@@ -246,13 +248,14 @@ for (const changed of [false, true]) {
 // Moving from one select to another that is then used (mouse press or a
 // key) must not flush in the gap between blur and focus.
 for (const pointer of [false, true]) {
-  const h = harness(), select = h.openFromDirty(), next = h.host.get("engine");
+  const h = harness(), select = h.openFromDirty(), next = h.host.get("stepAlgorithm");
   if (pointer) h.host.emit("pointerdown", next);
   h.host.emit("focusout", select, {relatedTarget: next}); next.focus();
   if (!pointer) h.host.emit("keydown", next, {key: " "});
   h.flush(); assert.equal(h.host.renders, 0);
-  next.value = "viennarna"; h.host.emit("change", next); h.flush();
-  assert.equal(h.state().structure.engine, "viennarna"); assert.equal(h.host.renders, 1);
+  next.value = "comrades"; h.host.emit("change", next); h.flush();
+  assert.deepEqual([h.state().structure.engine, h.state().structure.constraintMode], ["viennarna", "hyb-guided"]);
+  assert.equal(h.host.renders, 1);
 }
 // Ordinary actions receive the edited value before a deferred redraw.
 for (const fromSelect of [false, true]) {
